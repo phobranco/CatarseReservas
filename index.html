@@ -248,11 +248,13 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
         <div class="name">Philippe</div>
       </div>
 
-      <div class="alert-card">
+      <div class="alert-card" id="pendingAlertCard">
         <div class="alert-icon">!</div>
-        <div><h3>Atenção, bixo!</h3><p>AUD-014 · Cabo XLR 10 m ainda não voltou.</p></div>
+        <div><h3>Atenção, bixo!</h3><p id="pendingAlertText">Nenhum equipamento pendente.</p></div>
         <div class="arrow">›</div>
       </div>
+
+      <div id="pendingList" class="hidden"></div>
 
       <div class="section-title">Agora</div>
       <div class="quick-grid">
@@ -445,8 +447,53 @@ const flowState={
    retorno:new Set(),
    checkin:new Set()
  },
- issues:new Set()
+ issues:new Set(),
+ busy:false,
+ completedStages:new Set()
 };
+
+const STORAGE_KEY='catarse-flow-state-v2';
+const RESPONSIBLE='Philippe';
+let persistentRecords={pending:[],maintenance:[]};
+try{
+  const saved=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');
+  if(saved){
+    persistentRecords=saved.records||persistentRecords;
+    flowState.completedStages=new Set(saved.completedStages||[]);
+  }
+}catch(e){}
+
+function saveOperationalState(){
+  try{localStorage.setItem(STORAGE_KEY,JSON.stringify({records:persistentRecords,completedStages:[...flowState.completedStages]}))}catch(e){}
+  renderPendingHome();
+}
+function renderPendingHome(){
+  const list=document.getElementById('pendingList'), alert=document.getElementById('pendingAlertCard');
+  if(!list||!alert)return;
+  const pending=persistentRecords.pending;
+  alert.classList.toggle('hidden',pending.length===0);
+  document.getElementById('pendingAlertText').textContent=pending.length?pending.map(p=>`${p.code} · ${p.name} ainda não voltou.`).join(' '):'Nenhum equipamento pendente.';
+  list.className=pending.length?'card':'hidden';
+  list.innerHTML=pending.length?`<h3 style="margin-top:0">Pendências de equipamentos</h3>${pending.map(p=>`<div class="review-row"><span>${p.code} · ${p.name}<br><small>Responsável: ${p.responsible}</small></span><button class="btn" onclick="resolvePending(${p.id})">Registrar devolução</button></div>`).join('')}`:'';
+}
+function resolvePending(id){
+  const index=persistentRecords.pending.findIndex(p=>p.id===id);
+  if(index<0)return;
+  persistentRecords.pending.splice(index,1);
+  saveOperationalState();
+  alert('Devolução posterior registrada. A pendência foi resolvida.');
+}
+function registerRecords(checked){
+  const missing=flowItems.filter(i=>!checked.has(i.id));
+  missing.forEach(item=>{
+    if(!persistentRecords.pending.some(p=>p.id===item.id))persistentRecords.pending.push({id:item.id,code:item.code,name:item.name,responsible:RESPONSIBLE,reservation:'024'});
+  });
+  flowState.issues.forEach(id=>{
+    const item=flowItems.find(i=>i.id===id);
+    if(item&&!persistentRecords.maintenance.some(m=>m.id===id))persistentRecords.maintenance.push({id,item:item.name,code:item.code,responsible:RESPONSIBLE,reservation:'024'});
+  });
+  saveOperationalState();
+}
 
 function openFlow(stage='separacao'){
   go('fluxo');
@@ -523,6 +570,8 @@ function renderFlow(){
   const total=flowItems.length, count=checked.size;
   document.getElementById('flowProgressBar').style.width=((count/total)*100)+'%';
   document.getElementById('flowProgressText').textContent=`${count} de ${total} conferidos`;
+  document.getElementById('finishFlowBtn').disabled=flowState.busy||flowState.completedStages.has(stage);
+  document.getElementById('markAllBtn').disabled=flowState.busy||flowState.completedStages.has(stage);
 
   const result=document.getElementById('flowResult');
   result.innerHTML='';
@@ -533,57 +582,68 @@ function renderFlow(){
 }
 
 function toggleFlowItem(id){
+  if(flowState.busy||flowState.completedStages.has(flowState.stage))return;
   const set=flowState.checks[flowState.stage];
   set.has(id)?set.delete(id):set.add(id);
   renderFlow();
 }
 function markAllFlow(){
+  if(flowState.busy||flowState.completedStages.has(flowState.stage))return;
   const set=flowState.checks[flowState.stage];
   if(set.size===flowItems.length) set.clear(); else flowItems.forEach(i=>set.add(i.id));
   renderFlow();
 }
 function markItemOk(id){
+  if(flowState.busy)return;
   flowState.issues.delete(id);
   renderFlow();
 }
 function reportItemIssue(id){
+  if(flowState.busy)return;
   flowState.issues.add(id);
   renderFlow();
 }
 function finishFlowStage(){
+  if(flowState.busy||flowState.completedStages.has(flowState.stage))return;
   const stage=flowState.stage;
   const checked=flowState.checks[stage];
   const total=flowItems.length;
   const result=document.getElementById('flowResult');
 
+  flowState.busy=true;
+  renderFlow();
+
   if((stage==='separacao'||stage==='checkout') && checked.size<total){
     result.innerHTML=`<div class="pending-box"><h4>Faltam ${total-checked.size} itens</h4><div class="muted">Confira a carga antes de concluir esta etapa.</div></div>`;
+    flowState.busy=false;
+    renderFlow();
     return;
   }
+
+  flowState.completedStages.add(stage);
+  saveOperationalState();
 
   if(stage==='separacao'){
     flowState.checks.checkout=new Set(checked);
     result.innerHTML='<div class="done-box"><h4>✓ Carga separada</h4><div class="muted">Pronta para a conferência de saída.</div></div>';
-    setTimeout(()=>setFlowStage('checkout'),400);
+    setTimeout(()=>{flowState.busy=false;setFlowStage('checkout')},400);
   }else if(stage==='checkout'){
-    result.innerHTML='<div class="done-box"><h4>✓ Retirada confirmada</h4><div class="muted">A carga agora está oficialmente em uso.</div></div>';
+    flowState.checks.retorno=new Set(checked);
+    result.innerHTML='<div class="done-box"><h4>✓ Retirada confirmada</h4><div class="muted">A carga agora está oficialmente em uso. Próxima etapa: retorno.</div></div>';
+    setTimeout(()=>{flowState.busy=false;setFlowStage('retorno')},400);
   }else if(stage==='retorno'){
-    if(checked.size<total){
-      result.innerHTML=`<div class="pending-box"><h4>Retorno parcial registrado</h4><div class="muted">${checked.size}/${total} conferidos · ${total-checked.size} faltando. A reserva permanece aberta.</div></div>`;
-    }else{
-      flowState.checks.checkin=new Set();
-      result.innerHTML='<div class="done-box"><h4>✓ Tudo conferido no local</h4><div class="muted">Próxima etapa: check-in físico na Catarse.</div></div>';
-      setTimeout(()=>setFlowStage('checkin'),400);
-    }
+    flowState.checks.checkin=new Set(checked);
+    result.innerHTML=`<div class="done-box"><h4>✓ Conferência concluída</h4><div class="muted">${checked.size<total?`${total-checked.size} item(ns) seguirá(ão) como pendência. `:''}Próxima etapa: check-in na Catarse.</div></div>`;
+    setTimeout(()=>{flowState.busy=false;setFlowStage('checkin')},400);
   }else if(stage==='checkin'){
-    if(checked.size<total){
-      result.innerHTML=`<div class="pending-box"><h4>Devolução parcial</h4><div class="muted">${checked.size}/${total} devolvidos · ${total-checked.size} pendentes. A reserva permanece aberta.</div></div>`;
-    }else{
-      const issues=flowState.issues.size;
-      result.innerHTML=`<div class="done-box"><h4>✓ Check-in concluído</h4><div class="muted">Todos os itens retornaram.${issues?` ${issues} item${issues>1?'s':''} seguirá${issues>1?'ão':''} para manutenção.`:' Reserva concluída.'}</div></div>`;
-    }
+    registerRecords(checked);
+    const issues=flowState.issues.size;
+    result.innerHTML=`<div class="done-box"><h4>✓ Check-in concluído</h4><div class="muted">Reserva encerrada${checked.size<total?' com pendência':''}.${issues?` ${issues} item${issues>1?'s':''} registrado${issues>1?'s':''} para manutenção.`:''}</div></div>`;
+    setTimeout(()=>{flowState.busy=false;go('reservas');document.getElementById('reservationHome').classList.remove('hidden');document.getElementById('reservationWizard').classList.add('hidden')},500);
   }
 }
+
+renderPendingHome();
 
 </script>
 </body>
