@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Catarse Recursos — Protótipo</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{
   --bg:#f5f5f2; --surface:#ffffff; --surface-2:#efefec; --text:#111111;
@@ -224,7 +225,20 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
 }
 
 </style>
-</head>
+<style>
+@media (min-width:700px){
+ body{background:#090909}
+ .app{width:min(100%,1200px);padding-bottom:0}
+ .header{padding:22px 30px 16px}
+ main{padding:26px 34px 34px}
+ .quick-grid{grid-template-columns:repeat(4,1fr)}
+ .family-grid{grid-template-columns:repeat(5,1fr)}
+ #equipmentList,#reservationItems{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+ #equipmentList .item,#reservationItems .item{margin-top:0}
+ .bottomnav{position:sticky;left:auto;bottom:auto;transform:none;width:100%;padding:10px 22px;grid-template-columns:repeat(5,1fr)}
+ .reserve-nav{margin-top:-8px}
+}
+</style></head>
 <body>
 <div class="app">
   <header class="header">
@@ -371,6 +385,16 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
     <section id="perfil" class="screen">
       <div class="section-title">Perfil</div>
       <div class="card"><b>Philippe</b><div class="muted">Catártico · Cooperado</div></div>
+      <div class="card" id="cloudCard">
+        <h3 style="margin-top:0">Conexão com o Catarse</h3>
+        <div id="cloudStatus" class="muted">Verificando conexão...</div>
+        <div id="cloudLogin" style="margin-top:10px">
+          <label>E-mail</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="seu e-mail">
+          <label>Senha</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="sua senha">
+          <button class="btn primary full" style="margin-top:10px" onclick="cloudLogin()">Entrar e sincronizar</button>
+        </div>
+        <button id="cloudLogout" class="btn full hidden" style="margin-top:10px" onclick="cloudLogout()">Sair</button>
+      </div>
       <div class="card"><h3 style="margin-top:0">Aparência</h3><div class="profile-appearance"><button class="btn" onclick="setTheme('light')">☀ Claro</button><button class="btn" onclick="setTheme('dark')">☾ Escuro</button></div></div>
       <div class="card"><h3 style="margin-top:0">Tamanho da interface</h3><p class="muted">Escolha o tamanho mais confortável para leitura e toque.</p><div class="size-choice"><button class="sizebtn active" onclick="setSize(this,'normal')">Normal</button><button class="sizebtn" onclick="setSize(this,'large')">Grande</button><button class="sizebtn" onclick="setSize(this,'xlarge')">Extra grande</button></div></div>
     </section>
@@ -385,7 +409,21 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
   </nav>
 </div>
 <script>
-const allEquipment=[
+const SUPABASE_URL='https://xzzqaoomajgvywkcbmao.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY='sb_publishable_8TkD4kT1bNYfcnAhgEp7OQ_fsDh74Ab';
+const supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+let cloudUser=null,cloudSaving=false;
+function setCloudStatus(m,k='muted'){const e=document.getElementById('cloudStatus');if(!e)return;e.textContent=m;e.className=k==='ok'?'availability':k==='error'?'issue-tag':'muted'}
+function updateCloudUI(){const a=document.getElementById('cloudLogin'),b=document.getElementById('cloudLogout');if(a)a.classList.toggle('hidden',!!cloudUser);if(b)b.classList.toggle('hidden',!cloudUser);if(cloudUser)setCloudStatus('Conectado ao Supabase. Dados reais ativos.','ok');else setCloudStatus('Modo demonstração. Entre para carregar e salvar dados reais.')}
+async function cloudLogin(){const email=(document.getElementById('cloudEmail')?.value||'').trim(),password=document.getElementById('cloudPassword')?.value||'';if(!email||!password){setCloudStatus('Informe e-mail e senha.','error');return}setCloudStatus('Entrando...');const{data,error}=await supabaseClient.auth.signInWithPassword({email,password});if(error){setCloudStatus('Não foi possível entrar: '+error.message,'error');return}cloudUser=data.user;await loadCloudEquipment();updateCloudUI()}
+async function cloudLogout(){await supabaseClient.auth.signOut();cloudUser=null;updateCloudUI();setCloudStatus('Sessão encerrada. Modo demonstração.')}
+function relName(x){return Array.isArray(x)?(x[0]?.name||''):(x?.name||'')}
+async function loadCloudEquipment(){if(!cloudUser)return;setCloudStatus('Carregando equipamentos do Supabase...');const{data,error}=await supabaseClient.from('assets').select('id,code,name,status,active,resource_families(name),resource_categories(name)').eq('active',true).order('code');if(error){setCloudStatus('Equipamentos não carregaram: '+error.message,'error');return}const remote=(data||[]).map((x,i)=>({id:i+1,dbId:x.id,code:x.code,name:x.name,family:relName(x.resource_families)||x.code.split('-')[0],cat:relName(x.resource_categories)||'Geral',status:x.status}));if(remote.length){allEquipment=remote;selected=new Set([1]);filterEquipment('');setCloudStatus(remote.length+' equipamentos carregados do Supabase.','ok')}}
+function reservationDates(){const a=document.querySelectorAll('#step1 input[type="datetime-local"]'),s=a[0]?.value?new Date(a[0].value):new Date(),d=a[1]?.value?new Date(a[1].value):new Date(s.getTime()+7200000);return{starts_at:s.toISOString(),due_at:d.toISOString()}}
+async function saveReservationToCloud(){if(!cloudUser)return{saved:false};if(cloudSaving)return{saved:false,duplicate:true};cloudSaving=true;const t=reservationDates(),{data:r,error}=await supabaseClient.from('reservations').insert({requested_by:cloudUser.id,responsible_user_id:cloudUser.id,starts_at:t.starts_at,due_at:t.due_at,status:'reservado',purpose:'Reserva criada pelo app Catarse'}).select('id').single();if(error){cloudSaving=false;throw error}const items=allEquipment.filter(x=>selected.has(x.id)&&x.dbId).map(x=>({reservation_id:r.id,asset_id:x.dbId,source:'manual',status:'reservado',starts_at:t.starts_at,due_at:t.due_at}));if(!items.length){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw new Error('Nenhum equipamento real selecionado.')}const z=await supabaseClient.from('reservation_items').insert(items);if(z.error){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw z.error}cloudSaving=false;return{saved:true,id:r.id}}
+async function initSupabase(){updateCloudUI();const{data}=await supabaseClient.auth.getSession();cloudUser=data.session?.user||null;if(cloudUser)await loadCloudEquipment();updateCloudUI();supabaseClient.auth.onAuthStateChange((_e,s)=>{cloudUser=s?.user||null;updateCloudUI()})}
+
+let allEquipment=[
  {id:1,code:'VID-001',name:'Canon XA10',family:'Vídeo',cat:'Câmeras'},
  {id:2,code:'VID-002',name:'Bateria Canon #1',family:'Vídeo',cat:'Baterias'},
  {id:3,code:'VID-003',name:'Fonte Canon XA10',family:'Vídeo',cat:'Fontes'},
@@ -417,7 +455,7 @@ function toggleItem(id){selected.has(id)?selected.delete(id):selected.add(id);co
 function updateLoad(){const bar=document.getElementById('loadCount'),next=document.getElementById('step2next');if(selected.size){bar.classList.remove('hidden');next.classList.remove('hidden');bar.textContent=`Carga atual: ${selected.size} equipamento${selected.size>1?'s':''} selecionado${selected.size>1?'s':''}`}else{bar.classList.add('hidden');next.classList.add('hidden')}}
 function toggleCheck(row){const c=row.querySelector('.check');c.classList.toggle('on');c.textContent=c.classList.contains('on')?'✓':''}
 function renderReview(){const items=allEquipment.filter(g=>selected.has(g.id));document.getElementById('reviewCount').textContent=`${items.length} equipamento${items.length!==1?'s':''}`;document.getElementById('reviewItems').innerHTML=items.map(g=>`<div class="review-row"><span>${g.code}</span><b>${g.name}</b></div>`).join('')}
-function finishReservation(){alert('Reserva confirmada! Próxima etapa: Separação.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden')}
+async function finishReservation(){if(cloudUser){if(cloudSaving)return;try{const result=await saveReservationToCloud();alert('Reserva salva no Supabase! Próxima etapa: Separação.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden');setCloudStatus('Reserva '+result.id.slice(0,8)+' salva no Supabase.','ok')}catch(error){alert('A reserva não foi salva: '+error.message);setCloudStatus('Falha ao salvar reserva: '+error.message,'error')}return}alert('Reserva em modo demonstração. Entre no Perfil para salvar no Supabase.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden')}
 function setSize(btn,size){document.body.classList.remove('large','xlarge');if(size==='large')document.body.classList.add('large');if(size==='xlarge')document.body.classList.add('xlarge');document.querySelectorAll('.sizebtn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');try{localStorage.setItem('catarse-size',size)}catch(e){}}
 function setTheme(theme){document.documentElement.setAttribute('data-theme',theme);document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===theme));try{localStorage.setItem('catarse-theme',theme)}catch(e){}}
 document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()=>setTheme(b.dataset.theme)));
@@ -426,6 +464,7 @@ document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()
  let theme='light',size='normal';try{theme=localStorage.getItem('catarse-theme')||'light';size=localStorage.getItem('catarse-size')||'normal'}catch(e){}
  setTheme(theme);if(size==='large')document.body.classList.add('large');if(size==='xlarge')document.body.classList.add('xlarge');
  document.querySelectorAll('.sizebtn').forEach(b=>b.classList.remove('active'));const map={normal:0,large:1,xlarge:2},btns=document.querySelectorAll('.sizebtn');if(btns[map[size]])btns[map[size]].classList.add('active');
+  initSupabase();
 })();
 
 const flowItems=[
