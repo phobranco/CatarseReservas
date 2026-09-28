@@ -545,6 +545,15 @@ function setFlowStage(stage){
 
 function renderFlow(){
   const stage=flowState.stage;
+  if(!flowItems.length){
+    document.getElementById('flowChecklist').innerHTML='<div class="card"><b>Nenhuma operação real selecionada.</b><p class="muted">Abra uma reserva sincronizada para iniciar a separação e a conferência.</p></div>';
+    document.getElementById('flowProgressBar').style.width='0%';
+    document.getElementById('flowProgressText').textContent='Nenhuma operação carregada';
+    document.getElementById('finishFlowBtn').disabled=true;
+    document.getElementById('markAllBtn').disabled=true;
+    document.getElementById('flowResult').innerHTML='';
+    return;
+  }
   const checked=flowState.checks[stage];
   const groups=[...new Set(flowItems.map(i=>i.group))];
   let html='';
