@@ -309,7 +309,7 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
           <div class="section-title">Revisar reserva</div>
           <div class="card"><div class="review-row"><span>Trabalho</span><b id="reviewPurpose">—</b></div><div class="review-row"><span>Tipo</span><b id="reviewType">—</b></div><div class="review-row"><span>Carga</span><b id="reviewCount">1 equipamento</b></div></div>
           <div class="card"><h3 style="margin-top:0">Carga</h3><div id="reviewItems"></div></div>
-          <button class="btn primary full" onclick="finishReservation()">Confirmar reserva</button><button class="btn full" style="margin-top:8px" onclick="reservationStep(3)">Voltar</button>
+          <button id="confirmReservationBtn" class="btn primary full" onclick="finishReservation()">Confirmar reserva</button><div id="reservationSaveStatus" class="muted" style="margin-top:8px"></div><button class="btn full" style="margin-top:8px" onclick="reservationStep(3)">Voltar</button>
         </div>
       </div>
     </section>
@@ -499,12 +499,21 @@ function updateLoad(){
     next.classList.add('hidden');
   }
 }
+function setReservationSaveStatus(message,kind){
+  const e=document.getElementById('reservationSaveStatus');
+  if(e){e.textContent=message||'';e.className=kind==='error'?'issue-tag':kind==='ok'?'availability':'muted';}
+}
 async function finishReservation(){
   if(!cloudUser){
+    setReservationSaveStatus('Faça login para criar uma reserva real.','error');
     setCloudStatus('Faça login para criar uma reserva real.','error');
     return;
   }
   if(cloudSaving)return;
+  const button=document.getElementById('confirmReservationBtn');
+  cloudSaving=true;
+  if(button)button.disabled=true;
+  setReservationSaveStatus('Salvando reserva no Supabase...','muted');
   try{
     const result=await saveReservationToCloud();
     document.getElementById('reservationWizard').classList.add('hidden');
@@ -512,7 +521,11 @@ async function finishReservation(){
     setCloudStatus('Reserva '+result.id.slice(0,8)+' salva. Atualizando a lista...','ok');
     loadMobileReservations().then(()=>renderSyncedHome()).catch(error=>setCloudStatus('Reserva salva, mas a lista demorou para atualizar: '+error.message,'error'));
   }catch(error){
-    setCloudStatus('Falha ao salvar reserva: '+error.message,'error');
+    setReservationSaveStatus('Não foi possível salvar: '+(error.message||String(error)),'error');
+    setCloudStatus('Falha ao salvar reserva: '+(error.message||String(error)),'error');
+  }finally{
+    cloudSaving=false;
+    if(button)button.disabled=false;
   }
 }
 function setSize(btn,size){document.body.classList.remove('large','xlarge');if(size==='large')document.body.classList.add('large');if(size==='xlarge')document.body.classList.add('xlarge');document.querySelectorAll('.sizebtn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');try{localStorage.setItem('catarse-size',size)}catch(e){}}
