@@ -386,7 +386,7 @@ function updateCloudUI(){const a=document.getElementById('cloudLogin'),b=documen
 async function cloudLogin(emailOverride,passwordOverride){const email=(emailOverride??document.getElementById('cloudEmail')?.value??document.getElementById('gateEmail')?.value??'').trim(),password=passwordOverride??document.getElementById('cloudPassword')?.value??document.getElementById('gatePassword')?.value??'';if(!email||!password){setCloudStatus('Informe e-mail e senha.','error');setGateError('Informe e-mail e senha.');return}setCloudStatus('Entrando e sincronizando...');setGateError('');const{data,error}=await supabaseClient.auth.signInWithPassword({email,password});if(error){setCloudStatus('Não foi possível entrar: '+error.message,'error');setGateError('Não foi possível entrar: '+error.message);return}cloudUser=data.user;try{await syncMobileApp();updateCloudUI()}catch(syncError){await supabaseClient.auth.signOut();cloudUser=null;updateCloudUI();const message=syncError?.message||String(syncError);setCloudStatus('Login aceito, mas a sincronização falhou.','error');setGateError('Login aceito, mas não foi possível carregar os dados: '+message)}}
 async function cloudLogout(){await supabaseClient.auth.signOut();cloudUser=null;allEquipment=[];selected.clear();updateCloudUI();setGateError('');setCloudStatus('Sessão encerrada. Faça login para acessar o app.')}
 function relName(x){return Array.isArray(x)?(x[0]?.name||''):(x?.name||'')}
-async function loadCloudEquipment(){if(!cloudUser)return;setCloudStatus('Carregando equipamentos do Supabase...');const{data,error}=await supabaseClient.from('assets').select('id,code,name,status,active,resource_families(name),resource_categories(name)').eq('active',true).order('code');if(error){setCloudStatus('Equipamentos não carregaram: '+error.message,'error');return}const remote=(data||[]).map((x,i)=>({id:i+1,dbId:x.id,code:x.code,name:x.name,family:relName(x.resource_families)||x.code.split('-')[0],cat:relName(x.resource_categories)||'Geral',status:x.status}));if(remote.length){allEquipment=remote;selected=new Set([1]);filterEquipment('');setCloudStatus(remote.length+' equipamentos carregados do Supabase.','ok')}}
+async function loadCloudEquipment(){if(!cloudUser)return;setCloudStatus('Carregando equipamentos do Supabase...');const{data,error}=await supabaseClient.from('assets').select('id,code,name,status,active,resource_families(name),resource_categories(name)').eq('active',true).order('code');if(error){setCloudStatus('Equipamentos não carregaram: '+error.message,'error');return}const remote=(data||[]).map((x,i)=>({id:i+1,dbId:x.id,code:x.code,name:x.name,family:relName(x.resource_families)||x.code.split('-')[0],cat:relName(x.resource_categories)||'Geral',status:x.status}));if(remote.length){allEquipment=remote;selected=new Set();filterEquipment('');setCloudStatus(remote.length+' equipamentos carregados do Supabase.','ok')}}
 function reservationDates(){const a=document.querySelectorAll('#step1 input[type="datetime-local"]'),s=a[0]?.value?new Date(a[0].value):new Date(),d=a[1]?.value?new Date(a[1].value):new Date(s.getTime()+7200000);return{starts_at:s.toISOString(),due_at:d.toISOString()}}
 async function saveReservationToCloud(){
   if(!cloudUser)return{saved:false};
@@ -428,28 +428,63 @@ async function syncMobileApp(){if(!cloudUser)return;await loadCloudEquipment();a
 async function initSupabase(){updateCloudUI();const{data}=await supabaseClient.auth.getSession();cloudUser=data.session?.user||null;if(cloudUser){try{await syncMobileApp()}catch(syncError){await supabaseClient.auth.signOut();cloudUser=null;setGateError('Não foi possível sincronizar: '+(syncError?.message||String(syncError)))}}updateCloudUI();supabaseClient.auth.onAuthStateChange(async(_e,s)=>{cloudUser=s?.user||null;if(cloudUser){try{await syncMobileApp()}catch(syncError){await supabaseClient.auth.signOut();cloudUser=null;setGateError('Não foi possível sincronizar: '+(syncError?.message||String(syncError)))}}updateCloudUI()})}
 
 let allEquipment=[];
-let selected=new Set([1]);
+let selected=new Set();
 let currentEquipmentFamily='';
+let reservationFamily='';
+let reservationCategory='';
 function syncNav(id,btn){document.querySelectorAll('.navbtn').forEach(n=>n.classList.remove('active'));if(btn)btn.classList.add('active');else{const target=document.querySelector(`.navbtn[data-nav="${id}"]`);if(target)target.classList.add('active')}}
 function go(id,btn){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');syncNav(id,btn);window.scrollTo({top:0,behavior:'smooth'})}
 function equipmentHTML(items,selectable=false){return items.map(g=>`<div class="item ${selected.has(g.id)&&selectable?'selected':''}"><div class="grow"><strong>${g.name}</strong><div class="code">${g.code} · ${g.family} › ${g.cat}</div><div class="availability">Disponível no período</div></div>${selectable?`<button class="plus" onclick="toggleItem(${g.id})">${selected.has(g.id)?'✓':'+'}</button>`:''}</div>`).join('')||'<p class="muted">Nenhum equipamento encontrado.</p>'}
 function filterEquipment(q){const s=q.toLowerCase();document.getElementById('equipmentList').innerHTML=equipmentHTML(allEquipment.filter(g=>(!currentEquipmentFamily||g.family===currentEquipmentFamily)&&(g.name+' '+g.code+' '+g.family+' '+g.cat).toLowerCase().includes(s)))}
 function filterEquipmentFamily(btn,f){currentEquipmentFamily=currentEquipmentFamily===f?'':f;document.querySelectorAll('#equipamentos .family').forEach(x=>x.classList.toggle('active',x===btn&&currentEquipmentFamily===f));const search=document.querySelector('#equipamentos .searchbox input');filterEquipment(search?search.value:'')}
 filterEquipment('');
-function startReservation(){document.getElementById('reservationHome').classList.add('hidden');document.getElementById('reservationWizard').classList.remove('hidden');reservationStep(1)}
-function reservationStep(n){[1,2,3,4].forEach(i=>document.getElementById('step'+i).classList.toggle('hidden',i!==n));document.querySelectorAll('.step').forEach(s=>s.classList.toggle('active',+s.dataset.step===n));if(n===2)searchReservationItems(document.getElementById('reservationSearch').value);if(n===4)renderReview()}
-function chooseFamily(btn,f){document.querySelectorAll('#step2 .family').forEach(x=>x.classList.remove('active'));btn.classList.add('active');const cats=[...new Set(allEquipment.filter(g=>g.family===f).map(g=>g.cat))];document.getElementById('categories').innerHTML=cats.map(c=>`<button class="cat" onclick="chooseCategory(this,'${f}','${c}')">${c}</button>`).join('');document.getElementById('reservationItems').innerHTML=equipmentHTML(allEquipment.filter(g=>g.family===f),true);updateLoad()}
-function chooseCategory(btn,f,c){document.querySelectorAll('.cat').forEach(x=>x.classList.remove('active'));btn.classList.add('active');document.getElementById('reservationItems').innerHTML=equipmentHTML(allEquipment.filter(g=>g.family===f&&g.cat===c),true);updateLoad()}
-function searchReservationItems(q){const s=q.toLowerCase();document.getElementById('reservationItems').innerHTML=s?equipmentHTML(allEquipment.filter(g=>(g.name+' '+g.code+' '+g.family+' '+g.cat).toLowerCase().includes(s)),true):'';updateLoad()}
-function toggleItem(id){selected.has(id)?selected.delete(id):selected.add(id);const q=document.getElementById('reservationSearch').value;if(q)searchReservationItems(q);else updateLoad()}
-function updateLoad(){const bar=document.getElementById('loadCount'),next=document.getElementById('step2next');if(selected.size){bar.classList.remove('hidden');next.classList.remove('hidden');bar.textContent=`Carga atual: ${selected.size} equipamento${selected.size>1?'s':''} selecionado${selected.size>1?'s':''}`}else{bar.classList.add('hidden');next.classList.add('hidden')}}
-function toggleCheck(row){const c=row.querySelector('.check');c.classList.toggle('on');c.textContent=c.classList.contains('on')?'✓':''}
-function renderReview(){
+function startReservation(){
+  selected=new Set();
+  reservationFamily='';
+  reservationCategory='';
+  document.getElementById('reservationHome').classList.add('hidden');
+  document.getElementById('reservationWizard').classList.remove('hidden');
+  reservationStep(1);
+}
+function chooseFamily(btn,f){
+  reservationFamily=reservationFamily===f?'':f;
+  reservationCategory='';
+  document.querySelectorAll('#step2 .family').forEach(x=>x.classList.toggle('active',x===btn&&reservationFamily===f));
+  const cats=[...new Set(allEquipment.filter(g=>g.family===reservationFamily).map(g=>g.cat))];
+  document.getElementById('categories').innerHTML=reservationFamily?cats.map(c=>"<button class=\"cat\" onclick=\"chooseCategory(this,'"+reservationFamily+"','"+c+"')\">"+c+"</button>").join(""):"";
+  renderReservationItems();
+}
+function chooseCategory(btn,f,c){
+  reservationFamily=f;
+  reservationCategory=reservationCategory===c?'':c;
+  document.querySelectorAll('.cat').forEach(x=>x.classList.toggle('active',x===btn&&reservationCategory===c));
+  renderReservationItems();
+}
+function renderReservationItems(){
+  const q=(document.getElementById('reservationSearch')?.value||'').trim().toLowerCase();
+  let items=allEquipment;
+  if(q)items=allEquipment.filter(g=>(g.name+' '+g.code+' '+g.family+' '+g.cat).toLowerCase().includes(q));
+  else if(reservationFamily)items=allEquipment.filter(g=>g.family===reservationFamily&&(!reservationCategory||g.cat===reservationCategory));
+  document.getElementById('reservationItems').innerHTML=equipmentHTML(items,true);
+  updateLoad();
+}
+function searchReservationItems(){renderReservationItems()}
+function toggleItem(id){
+  selected.has(id)?selected.delete(id):selected.add(id);
+  renderReservationItems();
+}
+function updateLoad(){
+  const bar=document.getElementById('loadCount'),next=document.getElementById('step2next');
   const items=allEquipment.filter(g=>selected.has(g.id));
-  document.getElementById('reviewPurpose').textContent=document.querySelector('#step1 input')?.value||'—';
-  document.getElementById('reviewType').textContent=document.querySelector('#step1 select')?.value||'—';
-  document.getElementById('reviewCount').textContent=items.length+' equipamento'+(items.length!==1?'s':'');
-  document.getElementById('reviewItems').innerHTML=items.map(g=>'<div class="review-row"><span>'+g.code+'</span><b>'+g.name+'</b></div>').join('')||'<p class="muted">Nenhum equipamento real selecionado.</p>';
+  if(items.length){
+    bar.classList.remove('hidden');
+    bar.innerHTML='<strong>Carga selecionada ('+items.length+')</strong><div class="selected-load-list">'+items.map(g=>'<div class="selected-load-row"><span>'+g.code+' · '+g.name+'</span><button class="btn" type="button" onclick="toggleItem('+g.id+')">Remover</button></div>').join('')+'</div>';
+    next.classList.remove('hidden');
+  }else{
+    bar.classList.add('hidden');
+    bar.innerHTML='';
+    next.classList.add('hidden');
+  }
 }
 async function finishReservation(){if(cloudUser){if(cloudSaving)return;try{const result=await saveReservationToCloud();await loadMobileReservations();alert('Reserva salva no Supabase! Próxima etapa: Separação.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden');setCloudStatus('Reserva '+result.id.slice(0,8)+' salva no Supabase.','ok')}catch(error){alert('A reserva não foi salva: '+error.message);setCloudStatus('Falha ao salvar reserva: '+error.message,'error')}return}alert('Faça login para criar uma reserva real.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden')}
 function setSize(btn,size){document.body.classList.remove('large','xlarge');if(size==='large')document.body.classList.add('large');if(size==='xlarge')document.body.classList.add('xlarge');document.querySelectorAll('.sizebtn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');try{localStorage.setItem('catarse-size',size)}catch(e){}}
