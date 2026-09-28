@@ -225,8 +225,10 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
 }
 
 </style>
+<style>#authGate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg,#f4f4f4)}#authGate .auth-box{width:min(100%,430px);background:var(--surface,#fff);border:1px solid var(--border,#ddd);border-radius:20px;padding:24px;box-shadow:0 12px 36px rgba(0,0,0,.12)}#authGate h1{margin-top:0}.auth-error{color:#b00020;font-weight:700;min-height:20px;margin-top:8px}.app{display:none}.app.ready{display:block}</style>
 </head>
 <body>
+<div id="authGate"><div class="auth-box"><h1>Catarse Recursos</h1><p class="muted">Entre para abrir o app e sincronizar com os dados reais.</p><label>E-mail</label><input id="gateEmail" type="email" autocomplete="email" placeholder="seu e-mail"><label>Senha</label><input id="gatePassword" type="password" autocomplete="current-password" placeholder="sua senha"><button class="btn primary full" style="margin-top:14px" onclick="loginFromGate()">Entrar e sincronizar</button><div id="gateError" class="auth-error"></div></div></div>
 <div class="app">
   <header class="header">
     <div class="brand-row">
@@ -249,7 +251,7 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
         <div class="name">Philippe</div>
       </div>
 
-      <div class="alert-card" id="pendingAlertCard">
+      <div class="alert-card hidden" id="pendingAlertCard">
         <div class="alert-icon">!</div>
         <div><h3>Atenção, bixo!</h3><p id="pendingAlertText">Nenhum equipamento pendente.</p></div>
         <div class="arrow">›</div>
@@ -257,17 +259,8 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
 
       <div id="pendingList" class="hidden"></div>
 
-      <div class="section-title">Agora</div>
-      <div class="quick-grid">
-        <div class="quick-card primary" onclick="go('reservas');startReservation()" role="button" tabindex="0"><div class="icon">＋</div><div>Nova reserva</div><small>Montar uma carga</small></div>
-        <div class="quick-card"><div class="icon">◉</div><div>Em uso agora</div><small>Festival na Restinga · 10 itens</small></div>
-        <div class="quick-card"><div class="icon">✓</div><div>5 de 10 separados</div><small>Preparação em andamento</small></div>
-        <div class="quick-card"><div class="icon">↩</div><div>Retorno 02:00</div><small>Conferência pendente</small></div>
-      </div>
-
-      <div class="section-title">Próximas reservas</div>
-      <div class="res-card"><div class="datebox"><b>06</b><small>SET</small></div><div><h4>Documentário Ventre Livre</h4><div class="meta"><span>09:00</span><span>6 equipamentos</span></div></div><div class="arrow">›</div></div>
-      <div class="res-card"><div class="datebox"><b>08</b><small>SET</small></div><div><h4>Oficina de Comunicação</h4><div class="meta"><span>14:00</span><span>8 equipamentos</span></div></div><div class="arrow">›</div></div>
+      <div class="section-title">Dados sincronizados</div>
+      <div id="mobileSyncHome" class="card"><p class="muted">Carregando dados reais...</p></div>
     </section>
 
     <section id="equipamentos" class="screen">
@@ -398,14 +391,16 @@ const SUPABASE_PUBLISHABLE_KEY='sb_publishable_8TkD4kT1bNYfcnAhgEp7OQ_fsDh74Ab';
 const supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
 let cloudUser=null,cloudSaving=false;
 function setCloudStatus(m,k='muted'){const e=document.getElementById('cloudStatus');if(!e)return;e.textContent=m;e.className=k==='ok'?'availability':k==='error'?'issue-tag':'muted'}
-function updateCloudUI(){const a=document.getElementById('cloudLogin'),b=document.getElementById('cloudLogout');if(a)a.classList.toggle('hidden',!!cloudUser);if(b)b.classList.toggle('hidden',!cloudUser);if(cloudUser)setCloudStatus('Conectado ao Supabase. Dados reais ativos.','ok');else setCloudStatus('Modo demonstração. Entre para carregar e salvar dados reais.')}
-async function cloudLogin(){const email=(document.getElementById('cloudEmail')?.value||'').trim(),password=document.getElementById('cloudPassword')?.value||'';if(!email||!password){setCloudStatus('Informe e-mail e senha.','error');return}setCloudStatus('Entrando...');const{data,error}=await supabaseClient.auth.signInWithPassword({email,password});if(error){setCloudStatus('Não foi possível entrar: '+error.message,'error');return}cloudUser=data.user;await loadCloudEquipment();await loadMobileReservations();updateCloudUI()}
-async function cloudLogout(){await supabaseClient.auth.signOut();cloudUser=null;updateCloudUI();setCloudStatus('Sessão encerrada. Modo demonstração.')}
+function updateCloudUI(){const a=document.getElementById('cloudLogin'),b=document.getElementById('cloudLogout'),gate=document.getElementById('authGate'),app=document.querySelector('.app');if(a)a.classList.toggle('hidden',!!cloudUser);if(b)b.classList.toggle('hidden',!cloudUser);if(gate)gate.style.display=cloudUser?'none':'flex';if(app)app.classList.toggle('ready',!!cloudUser);if(cloudUser)setCloudStatus('Conectado ao Supabase. Dados reais sincronizados.','ok');else setCloudStatus('Login obrigatório para acessar os dados reais.','error')}
+async function cloudLogin(emailOverride,passwordOverride){const email=(emailOverride??document.getElementById('cloudEmail')?.value??document.getElementById('gateEmail')?.value??'').trim(),password=passwordOverride??document.getElementById('cloudPassword')?.value??document.getElementById('gatePassword')?.value??'';if(!email||!password){setCloudStatus('Informe e-mail e senha.','error');setGateError('Informe e-mail e senha.');return}setCloudStatus('Entrando e sincronizando...');setGateError('');const{data,error}=await supabaseClient.auth.signInWithPassword({email,password});if(error){setCloudStatus('Não foi possível entrar: '+error.message,'error');setGateError('Não foi possível entrar: '+error.message);return}cloudUser=data.user;await syncMobileApp();updateCloudUI()}
+async function cloudLogout(){await supabaseClient.auth.signOut();cloudUser=null;allEquipment=[];selected.clear();updateCloudUI();setGateError('');setCloudStatus('Sessão encerrada. Faça login para acessar o app.')}
 function relName(x){return Array.isArray(x)?(x[0]?.name||''):(x?.name||'')}
 async function loadCloudEquipment(){if(!cloudUser)return;setCloudStatus('Carregando equipamentos do Supabase...');const{data,error}=await supabaseClient.from('assets').select('id,code,name,status,active,resource_families(name),resource_categories(name)').eq('active',true).order('code');if(error){setCloudStatus('Equipamentos não carregaram: '+error.message,'error');return}const remote=(data||[]).map((x,i)=>({id:i+1,dbId:x.id,code:x.code,name:x.name,family:relName(x.resource_families)||x.code.split('-')[0],cat:relName(x.resource_categories)||'Geral',status:x.status}));if(remote.length){allEquipment=remote;selected=new Set([1]);filterEquipment('');setCloudStatus(remote.length+' equipamentos carregados do Supabase.','ok')}}
 function reservationDates(){const a=document.querySelectorAll('#step1 input[type="datetime-local"]'),s=a[0]?.value?new Date(a[0].value):new Date(),d=a[1]?.value?new Date(a[1].value):new Date(s.getTime()+7200000);return{starts_at:s.toISOString(),due_at:d.toISOString()}}
 async function saveReservationToCloud(){if(!cloudUser)return{saved:false};if(cloudSaving)return{saved:false,duplicate:true};cloudSaving=true;const t=reservationDates(),{data:r,error}=await supabaseClient.from('reservations').insert({requested_by:cloudUser.id,responsible_user_id:cloudUser.id,starts_at:t.starts_at,due_at:t.due_at,status:'reservado',purpose:(document.querySelector('#step1 input')?.value||'Reserva sem nome')}).select('id').single();if(error){cloudSaving=false;throw error}const items=allEquipment.filter(x=>selected.has(x.id)&&x.dbId).map(x=>({reservation_id:r.id,asset_id:x.dbId,source:'manual',status:'reservado',starts_at:t.starts_at,due_at:t.due_at}));if(!items.length){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw new Error('Nenhum equipamento real selecionado.')}const z=await supabaseClient.from('reservation_items').insert(items);if(z.error){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw z.error}cloudSaving=false;return{saved:true,id:r.id}}
 function escapeHtmlMobile(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+async function renderSyncedHome(){const box=document.getElementById('mobileSyncHome');if(!box||!cloudUser)return;const{data,error}=await supabaseClient.from('reservations').select('id,status,starts_at,due_at,purpose').eq('requested_by',cloudUser.id).order('starts_at',{ascending:false}).limit(5);if(error){box.innerHTML='<p class="muted">Não foi possível sincronizar a tela inicial.</p>';return}const rows=data||[];box.innerHTML='<button class="btn primary full" onclick="go(\'reservas\');startReservation()">+ Nova reserva</button>'+ (rows.length?'<div style="margin-top:12px">'+rows.map(x=>{const d=new Date(x.starts_at);return '<div class="review-row"><span>'+d.toLocaleDateString('pt-BR')+'<br><small>'+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+'</small></span><b>'+escapeHtmlMobile(x.purpose||'Reserva sem nome')+'</b><span class="chip warn">'+escapeHtmlMobile(x.status)+'</span></div>'}).join('')+'</div>':'<p class="muted" style="margin-top:12px">Nenhuma reserva real encontrada.</p>')}
+}
 async function loadMobileReservations(){
   if(!cloudUser)return;
   const box=document.getElementById('mobileReservationList');
@@ -414,24 +409,14 @@ async function loadMobileReservations(){
   if(error){box.innerHTML='<p class="muted">Não foi possível carregar suas reservas.</p>';return}
   const rows=data||[];
   box.innerHTML=rows.length?rows.map(x=>{const d=new Date(x.starts_at);return '<div class="review-row"><span>'+d.toLocaleDateString('pt-BR')+'<br><small>'+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+'</small></span><b>'+escapeHtmlMobile(x.purpose||'Reserva sem nome')+'</b><span class="chip warn">'+escapeHtmlMobile(x.status)+'</span></div>'}).join(''):'<p class="muted">Nenhuma reserva criada ainda.</p>';
+  await renderSyncedHome();
 }
-async function initSupabase(){updateCloudUI();const{data}=await supabaseClient.auth.getSession();cloudUser=data.session?.user||null;if(cloudUser)await loadCloudEquipment();updateCloudUI();supabaseClient.auth.onAuthStateChange((_e,s)=>{cloudUser=s?.user||null;updateCloudUI()})}
+function setGateError(message){const e=document.getElementById('gateError');if(e)e.textContent=message||''}
+function loginFromGate(){cloudLogin(document.getElementById('gateEmail')?.value,document.getElementById('gatePassword')?.value)}
+async function syncMobileApp(){if(!cloudUser)return;await loadCloudEquipment();await loadMobileReservations();await renderSyncedHome();renderPendingHome();filterEquipment('');updateCloudUI()}
+async function initSupabase(){updateCloudUI();const{data}=await supabaseClient.auth.getSession();cloudUser=data.session?.user||null;if(cloudUser)await syncMobileApp();else updateCloudUI();supabaseClient.auth.onAuthStateChange(async(_e,s)=>{cloudUser=s?.user||null;if(cloudUser)await syncMobileApp();else updateCloudUI()})}
 
-let allEquipment=[
- {id:1,code:'VID-001',name:'Canon XA10',family:'Vídeo',cat:'Câmeras'},
- {id:2,code:'VID-002',name:'Bateria Canon #1',family:'Vídeo',cat:'Baterias'},
- {id:3,code:'VID-003',name:'Fonte Canon XA10',family:'Vídeo',cat:'Fontes'},
- {id:4,code:'AUD-001',name:'Soundcraft UI24R',family:'Áudio',cat:'Mesas'},
- {id:5,code:'AUD-002',name:'Microfone Shotgun Rode',family:'Áudio',cat:'Microfones'},
- {id:6,code:'AUD-003',name:'Cabo XLR 10 m',family:'Áudio',cat:'Cabos'},
- {id:7,code:'AUD-004',name:'Pedestal de microfone',family:'Áudio',cat:'Pedestais'},
- {id:8,code:'LUZ-001',name:'Kit LED portátil',family:'Luz',cat:'Iluminação'},
- {id:9,code:'INF-001',name:'Notebook Catarse 01',family:'Informática',cat:'Notebooks'},
- {id:10,code:'ACE-001',name:'Extensão 20 m',family:'Acessórios',cat:'Elétrica'},
- {id:11,code:'ACE-002',name:'Régua AC',family:'Acessórios',cat:'Elétrica'},
- {id:12,code:'ACE-003',name:'Sacola Áudio 01',family:'Acessórios',cat:'Bolsas'},
- {id:13,code:'ACE-004',name:'Case pequeno',family:'Acessórios',cat:'Cases'}
-];
+let allEquipment=[];
 let selected=new Set([1]);
 let currentEquipmentFamily='';
 function syncNav(id,btn){document.querySelectorAll('.navbtn').forEach(n=>n.classList.remove('active'));if(btn)btn.classList.add('active');else{const target=document.querySelector(`.navbtn[data-nav="${id}"]`);if(target)target.classList.add('active')}}
@@ -449,7 +434,7 @@ function toggleItem(id){selected.has(id)?selected.delete(id):selected.add(id);co
 function updateLoad(){const bar=document.getElementById('loadCount'),next=document.getElementById('step2next');if(selected.size){bar.classList.remove('hidden');next.classList.remove('hidden');bar.textContent=`Carga atual: ${selected.size} equipamento${selected.size>1?'s':''} selecionado${selected.size>1?'s':''}`}else{bar.classList.add('hidden');next.classList.add('hidden')}}
 function toggleCheck(row){const c=row.querySelector('.check');c.classList.toggle('on');c.textContent=c.classList.contains('on')?'✓':''}
 function renderReview(){const items=allEquipment.filter(g=>selected.has(g.id));document.getElementById('reviewCount').textContent=`${items.length} equipamento${items.length!==1?'s':''}`;document.getElementById('reviewItems').innerHTML=items.map(g=>`<div class="review-row"><span>${g.code}</span><b>${g.name}</b></div>`).join('')}
-async function finishReservation(){if(cloudUser){if(cloudSaving)return;try{const result=await saveReservationToCloud();await loadMobileReservations();alert('Reserva salva no Supabase! Próxima etapa: Separação.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden');setCloudStatus('Reserva '+result.id.slice(0,8)+' salva no Supabase.','ok')}catch(error){alert('A reserva não foi salva: '+error.message);setCloudStatus('Falha ao salvar reserva: '+error.message,'error')}return}alert('Reserva em modo demonstração. Entre no Perfil para salvar no Supabase.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden')}
+async function finishReservation(){if(cloudUser){if(cloudSaving)return;try{const result=await saveReservationToCloud();await loadMobileReservations();alert('Reserva salva no Supabase! Próxima etapa: Separação.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden');setCloudStatus('Reserva '+result.id.slice(0,8)+' salva no Supabase.','ok')}catch(error){alert('A reserva não foi salva: '+error.message);setCloudStatus('Falha ao salvar reserva: '+error.message,'error')}return}alert('Faça login para criar uma reserva real.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden')}
 function setSize(btn,size){document.body.classList.remove('large','xlarge');if(size==='large')document.body.classList.add('large');if(size==='xlarge')document.body.classList.add('xlarge');document.querySelectorAll('.sizebtn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');try{localStorage.setItem('catarse-size',size)}catch(e){}}
 function setTheme(theme){document.documentElement.setAttribute('data-theme',theme);document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===theme));try{localStorage.setItem('catarse-theme',theme)}catch(e){}}
 document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()=>setTheme(b.dataset.theme)));
@@ -461,18 +446,8 @@ document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()
   initSupabase();
 })();
 
-const flowItems=[
- {id:1,code:'VID-001',name:'Canon XA10',group:'Vídeo'},
- {id:2,code:'VID-002',name:'Bateria Canon #1',group:'Vídeo'},
- {id:3,code:'VID-003',name:'Fonte Canon XA10',group:'Vídeo'},
- {id:4,code:'AUD-001',name:'Soundcraft UI24R',group:'Áudio'},
- {id:5,code:'AUD-002',name:'Microfone Shotgun Rode',group:'Áudio'},
- {id:6,code:'AUD-003',name:'Cabo XLR 10 m',group:'Áudio'},
- {id:7,code:'AUD-004',name:'Pedestal de microfone',group:'Áudio'},
- {id:8,code:'ACE-001',name:'Extensão 20 m',group:'Acessórios'},
- {id:9,code:'ACE-002',name:'Régua AC',group:'Acessórios'},
- {id:10,code:'ACE-003',name:'Sacola Áudio 01',group:'Acessórios'}
-];
+const flowItems=[];
+
 
 const flowState={
  stage:'separacao',
@@ -490,13 +465,7 @@ const flowState={
 const STORAGE_KEY='catarse-flow-state-v2';
 const RESPONSIBLE='Philippe';
 let persistentRecords={pending:[],maintenance:[]};
-try{
-  const saved=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');
-  if(saved){
-    persistentRecords=saved.records||persistentRecords;
-    flowState.completedStages=new Set(saved.completedStages||[]);
-  }
-}catch(e){}
+// Pendências operacionais serão carregadas do Supabase; não usar dados locais como verdade.
 
 function saveOperationalState(){
   try{localStorage.setItem(STORAGE_KEY,JSON.stringify({records:persistentRecords,completedStages:[...flowState.completedStages]}))}catch(e){}
