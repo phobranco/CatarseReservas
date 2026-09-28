@@ -388,9 +388,29 @@ async function cloudLogout(){await supabaseClient.auth.signOut();cloudUser=null;
 function relName(x){return Array.isArray(x)?(x[0]?.name||''):(x?.name||'')}
 async function loadCloudEquipment(){if(!cloudUser)return;setCloudStatus('Carregando equipamentos do Supabase...');const{data,error}=await supabaseClient.from('assets').select('id,code,name,status,active,resource_families(name),resource_categories(name)').eq('active',true).order('code');if(error){setCloudStatus('Equipamentos não carregaram: '+error.message,'error');return}const remote=(data||[]).map((x,i)=>({id:i+1,dbId:x.id,code:x.code,name:x.name,family:relName(x.resource_families)||x.code.split('-')[0],cat:relName(x.resource_categories)||'Geral',status:x.status}));if(remote.length){allEquipment=remote;selected=new Set([1]);filterEquipment('');setCloudStatus(remote.length+' equipamentos carregados do Supabase.','ok')}}
 function reservationDates(){const a=document.querySelectorAll('#step1 input[type="datetime-local"]'),s=a[0]?.value?new Date(a[0].value):new Date(),d=a[1]?.value?new Date(a[1].value):new Date(s.getTime()+7200000);return{starts_at:s.toISOString(),due_at:d.toISOString()}}
-async function saveReservationToCloud(){if(!cloudUser)return{saved:false};if(cloudSaving)return{saved:false,duplicate:true};cloudSaving=true;const t=reservationDates(),{data:r,error}=await supabaseClient.from('reservations').insert({requested_by:cloudUser.id,responsible_user_id:cloudUser.id,starts_at:t.starts_at,due_at:t.due_at,status:'reservado',purpose:(document.querySelector('#step1 input')?.value||'Reserva sem nome')}).select('id').single();if(error){cloudSaving=false;throw error}const items=allEquipment.filter(x=>selected.has(x.id)&&x.dbId).map(x=>({reservation_id:r.id,asset_id:x.dbId,source:'manual',status:'reservado',starts_at:t.starts_at,due_at:t.due_at}));if(!items.length){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw new Error('Nenhum equipamento real selecionado.')}const z=await supabaseClient.from('reservation_items').insert(items);if(z.error){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw z.error}cloudSaving=false;return{saved:true,id:r.id}}
+async function saveReservationToCloud(){
+  if(!cloudUser)return{saved:false};
+  if(cloudSaving)return{saved:false,duplicate:true};
+  cloudSaving=true;
+  const t=reservationDates();
+  const {data:r,error}=await supabaseClient.from('reservations').insert({requested_by:cloudUser.id,responsible_user_id:cloudUser.id,starts_at:t.starts_at,due_at:t.due_at,status:'reservado',purpose:(document.querySelector('#step1 input')?.value||'Reserva sem nome')}).select('id').single();
+  if(error){cloudSaving=false;throw error}
+  const items=allEquipment.filter(x=>selected.has(x.id)&&x.dbId).map(x=>({reservation_id:r.id,asset_id:x.dbId,source:'manual',status:'reservado',starts_at:t.starts_at,due_at:t.due_at}));
+  if(!items.length){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw new Error('Nenhum equipamento real selecionado.')}
+  const z=await supabaseClient.from('reservation_items').insert(items);
+  if(z.error){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw z.error}
+  cloudSaving=false;
+  return{saved:true,id:r.id};
+}
 function escapeHtmlMobile(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
-async function renderSyncedHome(){const box=document.getElementById('mobileSyncHome');if(!box||!cloudUser)return;const{data,error}=await supabaseClient.from('reservations').select('id,status,starts_at,due_at,purpose').eq('requested_by',cloudUser.id).order('starts_at',{ascending:false}).limit(5);if(error){box.innerHTML='<p class="muted">Não foi possível sincronizar a tela inicial.</p>';return}const rows=data||[];box.innerHTML='<button class="btn primary full" onclick="go(\'reservas\');startReservation()">+ Nova reserva</button>'+ (rows.length?'<div style="margin-top:12px">'+rows.map(x=>{const d=new Date(x.starts_at);return '<div class="review-row"><span>'+d.toLocaleDateString('pt-BR')+'<br><small>'+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+'</small></span><b>'+escapeHtmlMobile(x.purpose||'Reserva sem nome')+'</b><span class="chip warn">'+escapeHtmlMobile(x.status)+'</span></div>'}).join('')+'</div>':'<p class="muted" style="margin-top:12px">Nenhuma reserva real encontrada.</p>')}
+async function renderSyncedHome(){
+  const box=document.getElementById('mobileSyncHome');
+  if(!box||!cloudUser)return;
+  const {data,error}=await supabaseClient.from('reservations').select('id,status,starts_at,due_at,purpose').eq('requested_by',cloudUser.id).order('starts_at',{ascending:false}).limit(5);
+  if(error){box.innerHTML='<p class="muted">Não foi possível sincronizar a tela inicial.</p>';return}
+  const rows=data||[];
+  const cards=rows.map(x=>{const d=new Date(x.starts_at);return '<div class="review-row"><span>'+d.toLocaleDateString('pt-BR')+'<br><small>'+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+'</small></span><b>'+escapeHtmlMobile(x.purpose||'Reserva sem nome')+'</b><span class="chip warn">'+escapeHtmlMobile(x.status)+'</span></div>';}).join('');
+  box.innerHTML="<button class=\"btn primary full\" onclick=\"go('reservas');startReservation()\">+ Nova reserva</button>"+(cards?'<div style="margin-top:12px">'+cards+'</div>':'<p class="muted" style="margin-top:12px">Nenhuma reserva real encontrada.</p>');
 }
 async function loadMobileReservations(){
   if(!cloudUser)return;
@@ -424,7 +444,13 @@ function searchReservationItems(q){const s=q.toLowerCase();document.getElementBy
 function toggleItem(id){selected.has(id)?selected.delete(id):selected.add(id);const q=document.getElementById('reservationSearch').value;if(q)searchReservationItems(q);else updateLoad()}
 function updateLoad(){const bar=document.getElementById('loadCount'),next=document.getElementById('step2next');if(selected.size){bar.classList.remove('hidden');next.classList.remove('hidden');bar.textContent=`Carga atual: ${selected.size} equipamento${selected.size>1?'s':''} selecionado${selected.size>1?'s':''}`}else{bar.classList.add('hidden');next.classList.add('hidden')}}
 function toggleCheck(row){const c=row.querySelector('.check');c.classList.toggle('on');c.textContent=c.classList.contains('on')?'✓':''}
-function renderReview(){const items=allEquipment.filter(g=>selected.has(g.id));document.getElementById('reviewPurpose').textContent=document.querySelector('#step1 input')?.value||'—';document.getElementById('reviewType').textContent=document.querySelector('#step1 select')?.value||'—';document.getElementById('reviewCount').textContent=`${items.length} equipamento${items.length!==1?'s':''}`;document.getElementById('reviewItems').innerHTML=items.map(g=>`<div class="review-row"><span>${g.code}</span><b>${g.name}</b></div>`).join('')||'<p class="muted">Nenhum equipamento real selecionado.</p>')}
+function renderReview(){
+  const items=allEquipment.filter(g=>selected.has(g.id));
+  document.getElementById('reviewPurpose').textContent=document.querySelector('#step1 input')?.value||'—';
+  document.getElementById('reviewType').textContent=document.querySelector('#step1 select')?.value||'—';
+  document.getElementById('reviewCount').textContent=items.length+' equipamento'+(items.length!==1?'s':'');
+  document.getElementById('reviewItems').innerHTML=items.map(g=>'<div class="review-row"><span>'+g.code+'</span><b>'+g.name+'</b></div>').join('')||'<p class="muted">Nenhum equipamento real selecionado.</p>';
+}
 async function finishReservation(){if(cloudUser){if(cloudSaving)return;try{const result=await saveReservationToCloud();await loadMobileReservations();alert('Reserva salva no Supabase! Próxima etapa: Separação.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden');setCloudStatus('Reserva '+result.id.slice(0,8)+' salva no Supabase.','ok')}catch(error){alert('A reserva não foi salva: '+error.message);setCloudStatus('Falha ao salvar reserva: '+error.message,'error')}return}alert('Faça login para criar uma reserva real.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden')}
 function setSize(btn,size){document.body.classList.remove('large','xlarge');if(size==='large')document.body.classList.add('large');if(size==='xlarge')document.body.classList.add('xlarge');document.querySelectorAll('.sizebtn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');try{localStorage.setItem('catarse-size',size)}catch(e){}}
 function setTheme(theme){document.documentElement.setAttribute('data-theme',theme);document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===theme));try{localStorage.setItem('catarse-theme',theme)}catch(e){}}
