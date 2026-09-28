@@ -420,7 +420,6 @@ async function loadMobileReservations(){
   if(error){box.innerHTML='<p class="muted">Não foi possível carregar suas reservas.</p>';return}
   const rows=data||[];
   box.innerHTML=rows.length?rows.map(x=>{const d=new Date(x.starts_at);return '<div class="review-row"><span>'+d.toLocaleDateString('pt-BR')+'<br><small>'+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+'</small></span><b>'+escapeHtmlMobile(x.purpose||'Reserva sem nome')+'</b><span class="chip warn">'+escapeHtmlMobile(x.status)+'</span></div>'}).join(''):'<p class="muted">Nenhuma reserva criada ainda.</p>';
-  await renderSyncedHome();
 }
 function setGateError(message){const e=document.getElementById('gateError');if(e)e.textContent=message||''}
 function loginFromGate(){cloudLogin(document.getElementById('gateEmail')?.value,document.getElementById('gatePassword')?.value)}
@@ -486,7 +485,22 @@ function updateLoad(){
     next.classList.add('hidden');
   }
 }
-async function finishReservation(){if(cloudUser){if(cloudSaving)return;try{const result=await saveReservationToCloud();await loadMobileReservations();alert('Reserva salva no Supabase! Próxima etapa: Separação.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden');setCloudStatus('Reserva '+result.id.slice(0,8)+' salva no Supabase.','ok')}catch(error){alert('A reserva não foi salva: '+error.message);setCloudStatus('Falha ao salvar reserva: '+error.message,'error')}return}alert('Faça login para criar uma reserva real.');document.getElementById('reservationWizard').classList.add('hidden');document.getElementById('reservationHome').classList.remove('hidden')}
+async function finishReservation(){
+  if(!cloudUser){
+    setCloudStatus('Faça login para criar uma reserva real.','error');
+    return;
+  }
+  if(cloudSaving)return;
+  try{
+    const result=await saveReservationToCloud();
+    document.getElementById('reservationWizard').classList.add('hidden');
+    document.getElementById('reservationHome').classList.remove('hidden');
+    setCloudStatus('Reserva '+result.id.slice(0,8)+' salva. Atualizando a lista...','ok');
+    loadMobileReservations().then(()=>renderSyncedHome()).catch(error=>setCloudStatus('Reserva salva, mas a lista demorou para atualizar: '+error.message,'error'));
+  }catch(error){
+    setCloudStatus('Falha ao salvar reserva: '+error.message,'error');
+  }
+}
 function setSize(btn,size){document.body.classList.remove('large','xlarge');if(size==='large')document.body.classList.add('large');if(size==='xlarge')document.body.classList.add('xlarge');document.querySelectorAll('.sizebtn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');try{localStorage.setItem('catarse-size',size)}catch(e){}}
 function setTheme(theme){document.documentElement.setAttribute('data-theme',theme);document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===theme));try{localStorage.setItem('catarse-theme',theme)}catch(e){}}
 document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()=>setTheme(b.dataset.theme)));
