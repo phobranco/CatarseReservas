@@ -238,6 +238,9 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
  .bottomnav{position:sticky;left:auto;bottom:auto;transform:none;width:100%;padding:10px 22px;grid-template-columns:repeat(5,1fr)}
  .reserve-nav{margin-top:-8px}
 }
+</style><style>
+.central-metrics .quick-card{min-height:110px}
+@media (min-width:700px){.central-metrics{grid-template-columns:repeat(4,1fr)}}
 </style></head>
 <body>
 <div class="app">
@@ -258,29 +261,30 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
   <main>
     <section id="home" class="screen active">
       <div class="greeting">
-        <div class="hello" id="periodGreeting">Boa tarde, catártico.</div>
-        <div class="name">Philippe</div>
+        <div class="hello">Central Catarse</div>
+        <div class="name">Gestão de equipamentos e reservas</div>
       </div>
-
-      <div class="alert-card" id="pendingAlertCard">
+      <div class="alert-card hidden" id="centralAlertCard">
         <div class="alert-icon">!</div>
-        <div><h3>Atenção, bixo!</h3><p id="pendingAlertText">Nenhum equipamento pendente.</p></div>
+        <div><h3>Atenção, bixo!</h3><p id="centralAlertText">Carregando alertas...</p></div>
         <div class="arrow">›</div>
       </div>
-
-      <div id="pendingList" class="hidden"></div>
-
-      <div class="section-title">Agora</div>
-      <div class="quick-grid">
-        <div class="quick-card primary" onclick="go('reservas');startReservation()" role="button" tabindex="0"><div class="icon">＋</div><div>Nova reserva</div><small>Montar uma carga</small></div>
-        <div class="quick-card"><div class="icon">◉</div><div>Em uso agora</div><small>Festival na Restinga · 10 itens</small></div>
-        <div class="quick-card"><div class="icon">✓</div><div>5 de 10 separados</div><small>Preparação em andamento</small></div>
-        <div class="quick-card"><div class="icon">↩</div><div>Retorno 02:00</div><small>Conferência pendente</small></div>
+      <div class="section-title">Visão geral</div>
+      <div class="quick-grid central-metrics">
+        <div class="quick-card primary"><div class="icon">▣</div><div id="centralEquipmentCount">—</div><small>Equipamentos ativos</small></div>
+        <div class="quick-card"><div class="icon">☷</div><div id="centralReservationCount">—</div><small>Reservas próximas</small></div>
+        <div class="quick-card"><div class="icon">!</div><div id="centralPendingCount">—</div><small>Pendências abertas</small></div>
+        <div class="quick-card"><div class="icon">⚙</div><div id="centralMaintenanceCount">—</div><small>Em manutenção</small></div>
       </div>
-
-      <div class="section-title">Próximas reservas</div>
-      <div class="res-card"><div class="datebox"><b>06</b><small>SET</small></div><div><h4>Documentário Ventre Livre</h4><div class="meta"><span>09:00</span><span>6 equipamentos</span></div></div><div class="arrow">›</div></div>
-      <div class="res-card"><div class="datebox"><b>08</b><small>SET</small></div><div><h4>Oficina de Comunicação</h4><div class="meta"><span>14:00</span><span>8 equipamentos</span></div></div><div class="arrow">›</div></div>
+      <div class="section-title">Ações da Central</div>
+      <div class="quick-grid">
+        <div class="quick-card primary" onclick="go('reservas');startReservation()" role="button" tabindex="0"><div class="icon">＋</div><div>Nova reserva</div><small>Criar para um projeto</small></div>
+        <div class="quick-card" onclick="go('equipamentos')" role="button" tabindex="0"><div class="icon">▣</div><div>Equipamentos</div><small>Consultar inventário</small></div>
+        <div class="quick-card" onclick="go('fluxo')" role="button" tabindex="0"><div class="icon">↔</div><div>Operação</div><small>Separação e devolução</small></div>
+        <div class="quick-card" onclick="go('perfil')" role="button" tabindex="0"><div class="icon">●</div><div>Acesso</div><small>Conexão e perfil</small></div>
+      </div>
+      <div class="section-title">Reservas próximas</div>
+      <div id="centralReservations" class="card"><p class="muted">Entre no Supabase para carregar as reservas.</p></div>
     </section>
 
     <section id="equipamentos" class="screen">
@@ -401,7 +405,7 @@ input,select{width:100%;min-height:48px;border:1px solid var(--border);backgroun
   </main>
 
   <nav class="bottomnav">
-    <button class="navbtn active" data-nav="home" onclick="go('home',this)">⌂<br>Início</button>
+    <button class="navbtn active" data-nav="home" onclick="go('home',this)">⌂<br>Central</button>
     <button class="navbtn" data-nav="equipamentos" onclick="go('equipamentos',this)">▣<br>Equipamentos</button>
     <div class="reserve-nav-wrap"><div><button class="reserve-nav" title="Nova reserva" onclick="go('reservas');startReservation()">＋</button><div class="reserve-label">Reserva</div></div></div>
     <button class="navbtn" data-nav="reservas" onclick="go('reservas',this)">☷<br>Reservas</button>
@@ -415,12 +419,29 @@ const supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHA
 let cloudUser=null,cloudSaving=false;
 function setCloudStatus(m,k='muted'){const e=document.getElementById('cloudStatus');if(!e)return;e.textContent=m;e.className=k==='ok'?'availability':k==='error'?'issue-tag':'muted'}
 function updateCloudUI(){const a=document.getElementById('cloudLogin'),b=document.getElementById('cloudLogout');if(a)a.classList.toggle('hidden',!!cloudUser);if(b)b.classList.toggle('hidden',!cloudUser);if(cloudUser)setCloudStatus('Conectado ao Supabase. Dados reais ativos.','ok');else setCloudStatus('Modo demonstração. Entre para carregar e salvar dados reais.')}
-async function cloudLogin(){const email=(document.getElementById('cloudEmail')?.value||'').trim(),password=document.getElementById('cloudPassword')?.value||'';if(!email||!password){setCloudStatus('Informe e-mail e senha.','error');return}setCloudStatus('Entrando...');const{data,error}=await supabaseClient.auth.signInWithPassword({email,password});if(error){setCloudStatus('Não foi possível entrar: '+error.message,'error');return}cloudUser=data.user;await loadCloudEquipment();updateCloudUI()}
+async function cloudLogin(){const email=(document.getElementById('cloudEmail')?.value||'').trim(),password=document.getElementById('cloudPassword')?.value||'';if(!email||!password){setCloudStatus('Informe e-mail e senha.','error');return}setCloudStatus('Entrando...');const{data,error}=await supabaseClient.auth.signInWithPassword({email,password});if(error){setCloudStatus('Não foi possível entrar: '+error.message,'error');return}cloudUser=data.user;await loadCloudEquipment();await loadCentralData();updateCloudUI()}
 async function cloudLogout(){await supabaseClient.auth.signOut();cloudUser=null;updateCloudUI();setCloudStatus('Sessão encerrada. Modo demonstração.')}
 function relName(x){return Array.isArray(x)?(x[0]?.name||''):(x?.name||'')}
 async function loadCloudEquipment(){if(!cloudUser)return;setCloudStatus('Carregando equipamentos do Supabase...');const{data,error}=await supabaseClient.from('assets').select('id,code,name,status,active,resource_families(name),resource_categories(name)').eq('active',true).order('code');if(error){setCloudStatus('Equipamentos não carregaram: '+error.message,'error');return}const remote=(data||[]).map((x,i)=>({id:i+1,dbId:x.id,code:x.code,name:x.name,family:relName(x.resource_families)||x.code.split('-')[0],cat:relName(x.resource_categories)||'Geral',status:x.status}));if(remote.length){allEquipment=remote;selected=new Set([1]);filterEquipment('');setCloudStatus(remote.length+' equipamentos carregados do Supabase.','ok')}}
 function reservationDates(){const a=document.querySelectorAll('#step1 input[type="datetime-local"]'),s=a[0]?.value?new Date(a[0].value):new Date(),d=a[1]?.value?new Date(a[1].value):new Date(s.getTime()+7200000);return{starts_at:s.toISOString(),due_at:d.toISOString()}}
 async function saveReservationToCloud(){if(!cloudUser)return{saved:false};if(cloudSaving)return{saved:false,duplicate:true};cloudSaving=true;const t=reservationDates(),{data:r,error}=await supabaseClient.from('reservations').insert({requested_by:cloudUser.id,responsible_user_id:cloudUser.id,starts_at:t.starts_at,due_at:t.due_at,status:'reservado',purpose:'Reserva criada pelo app Catarse'}).select('id').single();if(error){cloudSaving=false;throw error}const items=allEquipment.filter(x=>selected.has(x.id)&&x.dbId).map(x=>({reservation_id:r.id,asset_id:x.dbId,source:'manual',status:'reservado',starts_at:t.starts_at,due_at:t.due_at}));if(!items.length){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw new Error('Nenhum equipamento real selecionado.')}const z=await supabaseClient.from('reservation_items').insert(items);if(z.error){await supabaseClient.from('reservations').delete().eq('id',r.id);cloudSaving=false;throw z.error}cloudSaving=false;return{saved:true,id:r.id}}
+async function loadCentralData(){
+  if(!cloudUser)return;
+  const [assets,reservations,pending,maintenance]=await Promise.all([
+    supabaseClient.from('assets').select('id',{count:'exact',head:true}).eq('active',true),
+    supabaseClient.from('reservations').select('id,status,starts_at,due_at,purpose').gte('starts_at',new Date().toISOString()).order('starts_at').limit(6),
+    supabaseClient.from('pending_items').select('id',{count:'exact',head:true}).eq('status','aberta'),
+    supabaseClient.from('maintenance_records').select('id',{count:'exact',head:true}).in('status',['aberta','em_andamento'])
+  ]);
+  document.getElementById('centralEquipmentCount').textContent=assets.count??'0';
+  document.getElementById('centralReservationCount').textContent=(reservations.data||[]).length;
+  document.getElementById('centralPendingCount').textContent=pending.count??'0';
+  document.getElementById('centralMaintenanceCount').textContent=maintenance.count??'0';
+  const list=document.getElementById('centralReservations');
+  if(reservations.error){list.innerHTML='<p class="muted">Não foi possível carregar reservas.</p>';return}
+  const rows=reservations.data||[];
+  list.innerHTML=rows.length?rows.map(x=>{const d=new Date(x.starts_at);return '<div class="review-row"><span>'+d.toLocaleDateString('pt-BR')+'<br><small>'+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+'</small></span><b>'+(x.purpose||'Reserva sem nome')+'</b><span class="chip warn">'+x.status+'</span></div>'}).join(''):'<p class="muted">Nenhuma reserva próxima.</p>';
+}
 async function initSupabase(){updateCloudUI();const{data}=await supabaseClient.auth.getSession();cloudUser=data.session?.user||null;if(cloudUser)await loadCloudEquipment();updateCloudUI();supabaseClient.auth.onAuthStateChange((_e,s)=>{cloudUser=s?.user||null;updateCloudUI()})}
 
 let allEquipment=[
