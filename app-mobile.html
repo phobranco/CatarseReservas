@@ -417,9 +417,28 @@ async function loadMobileReservations(){
   const box=document.getElementById('mobileReservationList');
   if(!box)return;
   const {data,error}=await supabaseClient.from('reservations').select('id,status,starts_at,due_at,purpose').eq('requested_by',cloudUser.id).order('starts_at',{ascending:false}).limit(20);
-  if(error){box.innerHTML='<p class="muted">Não foi possível carregar suas reservas.</p>';return}
+  if(error){box.innerHTML='<p class="muted">Não foi possível carregar suas reservas: '+escapeHtmlMobile(error.message)+'</p>';return}
   const rows=data||[];
-  box.innerHTML=rows.length?rows.map(x=>{const d=new Date(x.starts_at);return '<div class="review-row"><span>'+d.toLocaleDateString('pt-BR')+'<br><small>'+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+'</small></span><b>'+escapeHtmlMobile(x.purpose||'Reserva sem nome')+'</b><span class="chip warn">'+escapeHtmlMobile(x.status)+'</span></div>'}).join(''):'<p class="muted">Nenhuma reserva criada ainda.</p>';
+  box.innerHTML=rows.length?rows.map(x=>{
+    const d=new Date(x.starts_at);
+    return "<div class=\"card reservation-card\"><div class=\"review-row\"><span>"+d.toLocaleDateString('pt-BR')+"<br><small>"+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+"</small></span><b>"+escapeHtmlMobile(x.purpose||'Reserva sem nome')+"</b><span class=\"chip warn\">"+escapeHtmlMobile(x.status)+"</span></div><button class=\"btn primary full\" style=\"margin-top:10px\" onclick=\"openReservation('"+x.id+"')\">Abrir check-in / check-out</button></div>";
+  }).join(''):'<p class="muted">Nenhuma reserva criada ainda.</p>';
+}
+async function openReservation(reservationId){
+  if(!cloudUser)return;
+  setCloudStatus('Carregando itens da reserva...');
+  const {data,error}=await supabaseClient.from('reservation_items').select('id,status,asset_id,assets(name,code)').eq('reservation_id',reservationId).order('created_at');
+  if(error){setCloudStatus('Não foi possível abrir a reserva: '+error.message,'error');return}
+  if(!data||!data.length){setCloudStatus('Esta reserva não tem equipamentos vinculados.','error');return}
+  activeReservationId=reservationId;
+  flowItems=data.map((x,i)=>({id:i+1,dbId:x.id,assetId:x.asset_id,name:x.assets?.name||'Equipamento',code:x.assets?.code||'Sem código',group:'Equipamentos',status:x.status}));
+  flowState.stage='separacao';
+  flowState.checks={separacao:new Set(),checkout:new Set(),retorno:new Set(),checkin:new Set()};
+  flowState.issues=new Set();
+  flowState.busy=false;
+  flowState.completedStages=new Set();
+  openFlow('separacao');
+  setCloudStatus(data.length+' equipamento'+(data.length!==1?'s':'')+' carregado'+(data.length!==1?'s':'')+' para a operação.','ok');
 }
 function setGateError(message){const e=document.getElementById('gateError');if(e)e.textContent=message||''}
 function loginFromGate(){cloudLogin(document.getElementById('gateEmail')?.value,document.getElementById('gatePassword')?.value)}
@@ -539,7 +558,7 @@ document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()
   initSupabase();
 })();
 
-const flowItems=[];
+let flowItems=[];
 
 
 const flowState={
@@ -555,6 +574,7 @@ const flowState={
  completedStages:new Set()
 };
 
+let activeReservationId=null;
 const STORAGE_KEY='catarse-flow-state-v2';
 const RESPONSIBLE='Philippe';
 let persistentRecords={pending:[],maintenance:[]};
