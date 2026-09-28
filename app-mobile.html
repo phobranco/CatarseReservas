@@ -445,6 +445,20 @@ function startReservation(){
   document.getElementById('reservationWizard').classList.remove('hidden');
   reservationStep(1);
 }
+function reservationStep(n){
+  [1,2,3,4].forEach(i=>document.getElementById('step'+i).classList.toggle('hidden',i!==n));
+  document.querySelectorAll('#reservationWizard .step').forEach(s=>s.classList.toggle('active',Number(s.dataset.step)===n));
+  if(n===2)renderReservationItems();
+  if(n===4)renderReview();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function renderReview(){
+  const items=allEquipment.filter(g=>selected.has(g.id));
+  document.getElementById('reviewPurpose').textContent=document.querySelector('#step1 input')?.value.trim()||'—';
+  document.getElementById('reviewType').textContent=document.querySelector('#step1 select')?.value||'—';
+  document.getElementById('reviewCount').textContent=items.length+' equipamento'+(items.length===1?'':'s');
+  document.getElementById('reviewItems').innerHTML=items.map(g=>'<div class="review-row"><span>'+escapeHtmlMobile(g.code)+'</span><b>'+escapeHtmlMobile(g.name)+'</b></div>').join('');
+}
 function chooseFamily(btn,f){
   reservationFamily=reservationFamily===f?'':f;
   reservationCategory='';
