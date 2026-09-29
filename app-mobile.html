@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Catarse Recursos — Protótipo</title>
+<title>Catarse Recursos</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{
@@ -449,7 +449,7 @@ async function openReservation(reservationId,options={}){
   const checkinDone=eventTypes.has('fluxo_checkin_concluido')||activeReservation.status==='concluido';
   flowState.stage='separacao';
   flowState.checks={separacao:new Set(),checkout:new Set(),retorno:new Set(),checkin:new Set()};
-  flowState.issues=new Set(flowItems.filter(x=>x.problemReported).map(x=>x.id));
+  flowState.issues=new Set(flowItems.filter(x=>x.status==='devolvido'&&x.problemReported).map(x=>x.id));
   flowState.lockedCheckin=new Set(flowItems.filter(x=>x.status==='devolvido').map(x=>x.id));
   flowState.busy=false;
   flowState.completedStages=new Set();
@@ -457,6 +457,11 @@ async function openReservation(reservationId,options={}){
   if(separationDone){flowState.completedStages.add('separacao');flowState.checks.separacao=new Set(ids)}
   if(checkoutDone){flowState.completedStages.add('checkout');flowState.checks.checkout=new Set(ids)}
   if(returnDone){flowState.completedStages.add('retorno');flowState.checks.retorno=new Set(ids)}
+  else{
+    const lastPartial=[...events].reverse().find(x=>x.event_type==='fluxo_retorno_parcial');
+    const partialIds=new Set(lastPartial?.metadata?.checked_item_ids||[]);
+    flowState.checks.retorno=new Set(flowItems.filter(x=>partialIds.has(x.dbId)).map(x=>x.id));
+  }
   if(checkinDone){flowState.completedStages.add('checkin');flowState.checks.checkin=new Set(ids)}
   else if(returnDone){flowState.checks.checkin=new Set(flowState.lockedCheckin)}
   const derivedStage=checkinDone?'checkin':returnDone?'checkin':checkoutDone?'retorno':separationDone?'checkout':'separacao';
@@ -686,7 +691,7 @@ function renderFlow(){
     html+=`<div class="checklist-group"><div class="checklist-title">${group}</div>`;
     flowItems.filter(i=>i.group===group).forEach(item=>{
       const isChecked=checked.has(item.id);
-      const issue=flowState.issues.has(item.id);
+      const issue=stage==='checkin'&&flowState.issues.has(item.id);
       const itemLocked=readOnly||(stage==='checkin'&&flowState.lockedCheckin.has(item.id));
       html+=`<div class="check-item ${isChecked?'checked':''}">
         <button class="check-btn" ${itemLocked?'disabled':''} onclick="toggleFlowItem(${item.id})">${isChecked?'✓':''}</button>
