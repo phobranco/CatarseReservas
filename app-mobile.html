@@ -424,36 +424,45 @@ async function loadMobileReservations(){
     return "<div class=\"card reservation-card\"><div class=\"review-row\"><span>"+d.toLocaleDateString('pt-BR')+"<br><small>"+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+"</small></span><b>"+escapeHtmlMobile(x.purpose||'Reserva sem nome')+"</b><span class=\"chip warn\">"+escapeHtmlMobile(x.status)+"</span></div><button class=\"btn primary full\" style=\"margin-top:10px\" onclick=\"openReservation('"+x.id+"')\">Abrir check-in / check-out</button></div>";
   }).join(''):'<p class="muted">Nenhuma reserva criada ainda.</p>';
 }
-async function openReservation(reservationId){
+async function openReservation(reservationId,options={}){
   if(!cloudUser)return;
   setCloudStatus('Carregando itens da reserva...');
-  const {data,error}=await supabaseClient.from('reservation_items').select('id,status,asset_id,assets(name,code)').eq('reservation_id',reservationId).order('created_at');
+  const [itemsResult,reservationResult,eventsResult]=await Promise.all([
+    supabaseClient.from('reservation_items').select('id,status,asset_id,problem_reported,return_condition,assets(name,code)').eq('reservation_id',reservationId).neq('status','cancelado').order('created_at'),
+    supabaseClient.from('reservations').select('id,status,purpose').eq('id',reservationId).single(),
+    supabaseClient.from('reservation_events').select('event_type,metadata,occurred_at').eq('reservation_id',reservationId).order('occurred_at',{ascending:true})
+  ]);
+  const error=itemsResult.error||reservationResult.error||eventsResult.error;
+  const data=itemsResult.data;
   if(error){setCloudStatus('Não foi possível abrir a reserva: '+error.message,'error');return}
   if(!data||!data.length){setCloudStatus('Esta reserva não tem equipamentos vinculados.','error');return}
   activeReservationId=reservationId;
-  flowItems=data.map((x,i)=>({id:i+1,dbId:x.id,assetId:x.asset_id,name:x.assets?.name||'Equipamento',code:x.assets?.code||'Sem código',group:'Equipamentos',status:x.status}));
+  activeReservation=reservationResult.data;
+  flowItems=data.map((x,i)=>({id:i+1,dbId:x.id,assetId:x.asset_id,name:x.assets?.name||'Equipamento',code:x.assets?.code||'Sem código',group:'Equipamentos',status:x.status,problemReported:!!x.problem_reported,returnCondition:x.return_condition}));
   const ids=new Set(flowItems.map(x=>x.id));
+  const events=eventsResult.data||[];
+  const eventTypes=new Set(events.map(x=>x.event_type));
   const statuses=data.map(x=>x.status);
-  const checkoutDone=statuses.length>0&&statuses.every(s=>['retirado','devolvido','pendente'].includes(s));
-  const returnDone=statuses.length>0&&statuses.every(s=>['devolvido','pendente'].includes(s));
+  const separationDone=eventTypes.has('fluxo_separacao_concluida')||statuses.every(s=>['separado','retirado','devolvido','pendente'].includes(s));
+  const checkoutDone=eventTypes.has('fluxo_checkout_concluido')||statuses.every(s=>['retirado','devolvido','pendente'].includes(s));
+  const returnDone=eventTypes.has('fluxo_retorno_concluido')||['devolucao_parcial','concluido'].includes(activeReservation.status);
+  const checkinDone=eventTypes.has('fluxo_checkin_concluido')||activeReservation.status==='concluido';
   flowState.stage='separacao';
   flowState.checks={separacao:new Set(),checkout:new Set(),retorno:new Set(),checkin:new Set()};
-  flowState.issues=new Set(data.filter(x=>x.status==='pendente').map((x,i)=>flowItems[i]?.id).filter(Boolean));
+  flowState.issues=new Set(flowItems.filter(x=>x.problemReported).map(x=>x.id));
+  flowState.lockedCheckin=new Set(flowItems.filter(x=>x.status==='devolvido').map(x=>x.id));
   flowState.busy=false;
   flowState.completedStages=new Set();
-  if(checkoutDone){
-    flowState.completedStages.add('separacao');
-    flowState.completedStages.add('checkout');
-    flowState.checks.separacao=new Set(ids);
-    flowState.checks.checkout=new Set(ids);
-  }
-  if(returnDone){
-    flowState.completedStages.add('retorno');
-    flowState.completedStages.add('checkin');
-    flowState.checks.retorno=new Set(ids);
-    flowState.checks.checkin=new Set(ids);
-  }
-  openFlow(checkoutDone?'retorno':'separacao');
+  flowState.messages={separacao:'',checkout:'',retorno:'',checkin:''};
+  if(separationDone){flowState.completedStages.add('separacao');flowState.checks.separacao=new Set(ids)}
+  if(checkoutDone){flowState.completedStages.add('checkout');flowState.checks.checkout=new Set(ids)}
+  if(returnDone){flowState.completedStages.add('retorno');flowState.checks.retorno=new Set(ids)}
+  if(checkinDone){flowState.completedStages.add('checkin');flowState.checks.checkin=new Set(ids)}
+  else if(returnDone){flowState.checks.checkin=new Set(flowState.lockedCheckin)}
+  const derivedStage=checkinDone?'checkin':returnDone?'checkin':checkoutDone?'retorno':separationDone?'checkout':'separacao';
+  const targetStage=options.stage||derivedStage;
+  if(options.message)flowState.messages[targetStage]=options.message;
+  openFlow(targetStage);
   setCloudStatus(data.length+' equipamento'+(data.length!==1?'s':'')+' carregado'+(data.length!==1?'s':'')+' para a operação.','ok');
 }
 function setGateError(message){const e=document.getElementById('gateError');if(e)e.textContent=message||''}
@@ -575,8 +584,8 @@ document.querySelectorAll('.theme-btn').forEach(b=>b.addEventListener('click',()
 })();
 
 let flowItems=[];
-
-
+let activeReservation=null;
+const FLOW_ORDER=['separacao','checkout','retorno','checkin'];
 const flowState={
  stage:'separacao',
  checks:{
@@ -586,46 +595,24 @@ const flowState={
    checkin:new Set()
  },
  issues:new Set(),
+ lockedCheckin:new Set(),
  busy:false,
- completedStages:new Set()
+ completedStages:new Set(),
+ messages:{separacao:'',checkout:'',retorno:'',checkin:''}
 };
 
 let activeReservationId=null;
-const STORAGE_KEY='catarse-flow-state-v2';
-const RESPONSIBLE='Philippe';
-let persistentRecords={pending:[],maintenance:[]};
-// Pendências operacionais serão carregadas do Supabase; não usar dados locais como verdade.
-
-function saveOperationalState(){
-  try{localStorage.setItem(STORAGE_KEY,JSON.stringify({records:persistentRecords,completedStages:[...flowState.completedStages]}))}catch(e){}
-  renderPendingHome();
-}
-function renderPendingHome(){
+async function renderPendingHome(){
   const list=document.getElementById('pendingList'), alert=document.getElementById('pendingAlertCard');
   if(!list||!alert)return;
-  const pending=persistentRecords.pending;
+  if(!cloudUser){alert.classList.add('hidden');list.className='hidden';list.innerHTML='';return}
+  const {data,error}=await supabaseClient.from('reservation_items').select('id,reservation_id,assets(name,code),reservations(purpose)').eq('status','pendente');
+  if(error){list.className='card';list.innerHTML='<p class="muted">Não foi possível carregar as pendências agora.</p>';return}
+  const pending=(data||[]).map(x=>({id:x.id,reservationId:x.reservation_id,code:x.assets?.code||'Sem código',name:x.assets?.name||'Equipamento',reservation:x.reservations?.purpose||'Reserva'}));
   alert.classList.toggle('hidden',pending.length===0);
   document.getElementById('pendingAlertText').textContent=pending.length?pending.map(p=>`${p.code} · ${p.name} ainda não voltou.`).join(' '):'Nenhum equipamento pendente.';
   list.className=pending.length?'card':'hidden';
-  list.innerHTML=pending.length?`<h3 style="margin-top:0">Pendências de equipamentos</h3>${pending.map(p=>`<div class="review-row"><span>${p.code} · ${p.name}<br><small>Responsável: ${p.responsible}</small></span><button class="btn" onclick="resolvePending(${p.id})">Registrar devolução</button></div>`).join('')}`:'';
-}
-function resolvePending(id){
-  const index=persistentRecords.pending.findIndex(p=>p.id===id);
-  if(index<0)return;
-  persistentRecords.pending.splice(index,1);
-  saveOperationalState();
-  alert('Devolução posterior registrada. A pendência foi resolvida.');
-}
-function registerRecords(checked){
-  const missing=flowItems.filter(i=>!checked.has(i.id));
-  missing.forEach(item=>{
-    if(!persistentRecords.pending.some(p=>p.id===item.id))persistentRecords.pending.push({id:item.id,code:item.code,name:item.name,responsible:RESPONSIBLE,reservation:'024'});
-  });
-  flowState.issues.forEach(id=>{
-    const item=flowItems.find(i=>i.id===id);
-    if(item&&!persistentRecords.maintenance.some(m=>m.id===id))persistentRecords.maintenance.push({id,item:item.name,code:item.code,responsible:RESPONSIBLE,reservation:'024'});
-  });
-  saveOperationalState();
+  list.innerHTML=pending.length?`<h3 style="margin-top:0">Pendências de equipamentos</h3>${pending.map(p=>`<div class="review-row"><span>${escapeHtmlMobile(p.code)} · ${escapeHtmlMobile(p.name)}<br><small>${escapeHtmlMobile(p.reservation)}</small></span><button class="btn" onclick="openReservation('${p.reservationId}')">Abrir reserva</button></div>`).join('')}`:'';
 }
 
 function openFlow(stage='separacao'){
@@ -663,6 +650,14 @@ function flowLabels(stage){
 }
 
 function setFlowStage(stage){
+  if(!FLOW_ORDER.includes(stage))return;
+  const currentIndex=FLOW_ORDER.findIndex(x=>!flowState.completedStages.has(x));
+  const maxIndex=currentIndex<0?FLOW_ORDER.length-1:currentIndex;
+  if(!flowState.completedStages.has(stage)&&FLOW_ORDER.indexOf(stage)>maxIndex){
+    flowState.messages[flowState.stage]='<div class="pending-box"><h4>Etapa ainda bloqueada</h4><div class="muted">Conclua a etapa atual antes de avançar.</div></div>';
+    renderFlow();
+    return;
+  }
   flowState.stage=stage;
   document.querySelectorAll('.flow-tab').forEach(b=>b.classList.toggle('active',b.dataset.flowtab===stage));
   const labels=flowLabels(stage);
@@ -680,10 +675,11 @@ function renderFlow(){
     document.getElementById('flowProgressText').textContent='Nenhuma operação carregada';
     document.getElementById('finishFlowBtn').disabled=true;
     document.getElementById('markAllBtn').disabled=true;
-    document.getElementById('flowResult').innerHTML='';
+    document.getElementById('flowResult').innerHTML=flowState.messages[stage]||'';
     return;
   }
   const checked=flowState.checks[stage];
+  const readOnly=flowState.completedStages.has(stage);
   const groups=[...new Set(flowItems.map(i=>i.group))];
   let html='';
   for(const group of groups){
@@ -691,14 +687,15 @@ function renderFlow(){
     flowItems.filter(i=>i.group===group).forEach(item=>{
       const isChecked=checked.has(item.id);
       const issue=flowState.issues.has(item.id);
+      const itemLocked=readOnly||(stage==='checkin'&&flowState.lockedCheckin.has(item.id));
       html+=`<div class="check-item ${isChecked?'checked':''}">
-        <button class="check-btn" onclick="toggleFlowItem(${item.id})">${isChecked?'✓':''}</button>
+        <button class="check-btn" ${itemLocked?'disabled':''} onclick="toggleFlowItem(${item.id})">${isChecked?'✓':''}</button>
         <div class="check-main">
           <b>${item.name}</b>
           <small>${item.code}</small>
           ${issue?'<span class="issue-tag">Problema informado</span>':''}
         </div>
-        ${stage==='checkin'&&isChecked?`
+        ${stage==='checkin'&&isChecked&&!itemLocked?`
           <div class="issue-actions">
             <button class="btn" onclick="markItemOk(${item.id})">✓ Tudo OK</button>
             <button class="btn red" onclick="reportItemIssue(${item.id})">Informar problema</button>
@@ -712,78 +709,63 @@ function renderFlow(){
   const total=flowItems.length, count=checked.size;
   document.getElementById('flowProgressBar').style.width=((count/total)*100)+'%';
   document.getElementById('flowProgressText').textContent=`${count} de ${total} conferidos`;
-  document.getElementById('finishFlowBtn').disabled=flowState.busy||flowState.completedStages.has(stage);
-  document.getElementById('markAllBtn').disabled=flowState.busy||flowState.completedStages.has(stage);
+  document.getElementById('finishFlowBtn').disabled=flowState.busy||readOnly;
+  document.getElementById('markAllBtn').disabled=flowState.busy||readOnly;
 
   const result=document.getElementById('flowResult');
-  result.innerHTML='';
-  if((stage==='retorno'||stage==='checkin') && count<total && count>0){
+  result.innerHTML=flowState.messages[stage]||'';
+  if(!flowState.messages[stage]&&(stage==='retorno'||stage==='checkin') && count<total && count>0){
     const missing=flowItems.filter(i=>!checked.has(i.id));
     result.innerHTML=`<div class="pending-box"><h4>⚠ ${count}/${total} conferidos · ${missing.length} pendente${missing.length>1?'s':''}</h4><div class="muted">${missing.map(i=>`${i.code} · ${i.name}`).join('<br>')}</div></div>`;
   }
 }
 
 function toggleFlowItem(id){
-  if(flowState.busy||flowState.completedStages.has(flowState.stage))return;
+  if(flowState.busy||flowState.completedStages.has(flowState.stage)||(flowState.stage==='checkin'&&flowState.lockedCheckin.has(id)))return;
   const set=flowState.checks[flowState.stage];
   set.has(id)?set.delete(id):set.add(id);
+  if(!set.has(id))flowState.issues.delete(id);
+  flowState.messages[flowState.stage]='';
   renderFlow();
 }
 function markAllFlow(){
   if(flowState.busy||flowState.completedStages.has(flowState.stage))return;
   const set=flowState.checks[flowState.stage];
-  if(set.size===flowItems.length) set.clear(); else flowItems.forEach(i=>set.add(i.id));
+  if(set.size===flowItems.length){
+    set.clear();
+    if(flowState.stage==='checkin')flowState.lockedCheckin.forEach(id=>set.add(id));
+  }else flowItems.forEach(i=>set.add(i.id));
+  flowState.messages[flowState.stage]='';
   renderFlow();
 }
 function markItemOk(id){
   if(flowState.busy)return;
   flowState.issues.delete(id);
+  flowState.messages[flowState.stage]='';
   renderFlow();
 }
 function reportItemIssue(id){
   if(flowState.busy)return;
   flowState.issues.add(id);
+  flowState.messages[flowState.stage]='';
   renderFlow();
 }
 async function persistFlowStage(stage,checked){
-  if(!activeReservationId||!cloudUser)return true;
-  const now=new Date().toISOString();
+  if(!activeReservationId||!cloudUser)throw new Error('Faça login novamente para continuar.');
   const itemIds=flowItems.filter(i=>checked.has(i.id)).map(i=>i.dbId);
+  const issueIds=flowItems.filter(i=>checked.has(i.id)&&flowState.issues.has(i.id)).map(i=>i.dbId);
   try{
-    if(stage==='separacao'){
-      const q=await supabaseClient.from('reservation_items').update({status:'separado'}).in('id',itemIds);
-      if(q.error)throw q.error;
-      await supabaseClient.from('reservations').update({status:'separado'}).eq('id',activeReservationId);
-    }else if(stage==='checkout'){
-      const q=await supabaseClient.from('reservation_items').update({status:'retirado',checked_out_at:now,checked_out_by:cloudUser.id}).in('id',itemIds);
-      if(q.error)throw q.error;
-      const r=await supabaseClient.from('reservations').update({status:'retirado'}).eq('id',activeReservationId);
-      if(r.error)throw r.error;
-      await supabaseClient.from('reservation_events').insert(itemIds.map(id=>({reservation_id:activeReservationId,reservation_item_id:id,event_type:'checkout',actor_id:cloudUser.id,metadata:{}})));
-    }else if(stage==='checkin'){
-      const updates=flowItems.map(async item=>{
-        const isChecked=checked.has(item.id);
-        const hasIssue=flowState.issues.has(item.id);
-        const values=isChecked
-          ? {status:hasIssue?'pendente':'devolvido',returned_at:now,returned_by:cloudUser.id,problem_reported:hasIssue,return_condition:hasIssue?'avariado':'bom'}
-          : {status:'pendente',problem_reported:true};
-        const q=await supabaseClient.from('reservation_items').update(values).eq('id',item.dbId);
-        if(q.error)throw q.error;
-        if(hasIssue){
-          const a=await supabaseClient.from('assets').update({status:'manutencao',condition:'avariado'}).eq('id',item.assetId);
-          if(a.error)throw a.error;
-          await supabaseClient.from('maintenance_cases').insert({asset_id:item.assetId,opened_by:cloudUser.id,issue:'Problema informado no check-in da reserva',status:'aguardando_levar'});
-        }
-        return hasIssue;
-      });
-      await Promise.all(updates);
-      const r=await supabaseClient.from('reservations').update({status:flowState.issues.size||checked.size<flowItems.length?'devolucao_parcial':'concluido'}).eq('id',activeReservationId);
-      if(r.error)throw r.error;
-    }
-    return true;
+    const {data,error}=await supabaseClient.rpc('complete_mobile_flow_stage',{
+      p_reservation_id:activeReservationId,
+      p_stage:stage,
+      p_checked_item_ids:itemIds,
+      p_issue_item_ids:issueIds
+    });
+    if(error)throw error;
+    return data;
   }catch(error){
-    setCloudStatus('Etapa registrada localmente, mas houve falha na sincronização: '+error.message,'error');
-    return false;
+    setCloudStatus('A etapa não foi alterada: '+error.message,'error');
+    throw error;
   }
 }
 async function finishFlowStage(){
@@ -791,35 +773,47 @@ async function finishFlowStage(){
   const stage=flowState.stage;
   const checked=flowState.checks[stage];
   const total=flowItems.length;
-  const result=document.getElementById('flowResult');
-  flowState.busy=true;
-  renderFlow();
   if((stage==='separacao'||stage==='checkout')&&checked.size<total){
-    result.innerHTML='<div class="pending-box"><h4>Faltam '+(total-checked.size)+' itens</h4><div class="muted">Confira a carga antes de concluir esta etapa.</div></div>';
-    flowState.busy=false;
+    flowState.messages[stage]='<div class="pending-box"><h4>Faltam '+(total-checked.size)+' itens</h4><div class="muted">Confira a carga antes de concluir esta etapa.</div></div>';
     renderFlow();
     return;
   }
-  const synced=await persistFlowStage(stage,checked);
-  flowState.completedStages.add(stage);
-  saveOperationalState();
-  if(stage==='separacao'){
-    result.innerHTML='<div class="done-box"><h4>✓ Carga separada</h4><div class="muted">Pronta para a conferência de saída.</div></div>';
-    flowState.checks.checkout=new Set();
-    setTimeout(()=>{flowState.busy=false;setFlowStage('checkout')},400);
-  }else if(stage==='checkout'){
-    result.innerHTML='<div class="done-box"><h4>✓ Check-out concluído</h4><div class="muted">Esta etapa ficará disponível somente para consulta. Próxima etapa: retorno.</div></div>';
-    flowState.checks.retorno=new Set();
-    setTimeout(()=>{flowState.busy=false;setFlowStage('retorno')},400);
-  }else if(stage==='retorno'){
-    result.innerHTML='<div class="done-box"><h4>✓ Conferência de retorno concluída</h4><div class="muted">Próxima etapa: check-in na Catarse.</div></div>';
-    flowState.checks.checkin=new Set();
-    setTimeout(()=>{flowState.busy=false;setFlowStage('checkin')},400);
-  }else if(stage==='checkin'){
-    registerRecords(checked);
+  if((stage==='retorno'||stage==='checkin')&&checked.size===0){
+    flowState.messages[stage]='<div class="pending-box"><h4>Nenhum equipamento conferido</h4><div class="muted">Marque ao menos um item para registrar esta etapa.</div></div>';
+    renderFlow();
+    return;
+  }
+  flowState.busy=true;
+  flowState.messages[stage]='<div class="card"><div class="muted">Salvando no Supabase…</div></div>';
+  renderFlow();
+  try{
+    const saved=await persistFlowStage(stage,checked);
+    const complete=!!saved?.completed;
     const issues=flowState.issues.size;
-    result.innerHTML='<div class="done-box"><h4>✓ Check-in concluído</h4><div class="muted">Reserva encerrada'+(checked.size<total?' com pendência':'')+'.'+(issues?' '+issues+' item(ns) enviado(s) para manutenção.':'')+'</div></div>';
-    setTimeout(()=>{flowState.busy=false;go('reservas');document.getElementById('reservationHome').classList.remove('hidden');document.getElementById('reservationWizard').classList.add('hidden')},500);
+    let message='';
+    let targetStage=stage;
+    if(stage==='separacao'){
+      targetStage='checkout';
+      message='<div class="done-box"><h4>✓ Carga separada</h4><div class="muted">A lista do check-out começou zerada. Confira novamente a saída.</div></div>';
+    }else if(stage==='checkout'){
+      targetStage='retorno';
+      message='<div class="done-box"><h4>✓ Check-out concluído</h4><div class="muted">A carga está em uso. O check-out ficou disponível somente para consulta.</div></div>';
+    }else if(stage==='retorno'&&complete){
+      targetStage='checkin';
+      message='<div class="done-box"><h4>✓ Tudo conferido no local</h4><div class="muted">A lista do check-in começou zerada para o recebimento físico na Catarse.</div></div>';
+    }else if(stage==='retorno'){
+      message='<div class="pending-box"><h4>Retorno parcial registrado</h4><div class="muted">'+checked.size+'/'+total+' conferidos. A reserva permanece aberta nesta etapa.</div></div>';
+    }else if(stage==='checkin'&&complete){
+      message='<div class="done-box"><h4>✓ Check-in concluído</h4><div class="muted">Reserva concluída e disponível somente para consulta.'+(issues?' '+issues+' equipamento(s) enviado(s) para manutenção.':'')+'</div></div>';
+    }else{
+      message='<div class="pending-box"><h4>Devolução parcial registrada</h4><div class="muted">'+checked.size+'/'+total+' recebidos. A reserva permanece aberta para os itens pendentes.</div></div>';
+    }
+    await openReservation(activeReservationId,{stage:targetStage,message});
+    await Promise.all([loadMobileReservations(),renderSyncedHome(),renderPendingHome()]);
+  }catch(error){
+    flowState.messages[stage]='<div class="pending-box"><h4>Não foi possível concluir</h4><div class="muted">'+escapeHtmlMobile(error.message||String(error))+'</div></div>';
+    flowState.busy=false;
+    renderFlow();
   }
 }
 renderPendingHome();
