@@ -432,12 +432,28 @@ async function openReservation(reservationId){
   if(!data||!data.length){setCloudStatus('Esta reserva não tem equipamentos vinculados.','error');return}
   activeReservationId=reservationId;
   flowItems=data.map((x,i)=>({id:i+1,dbId:x.id,assetId:x.asset_id,name:x.assets?.name||'Equipamento',code:x.assets?.code||'Sem código',group:'Equipamentos',status:x.status}));
+  const ids=new Set(flowItems.map(x=>x.id));
+  const statuses=data.map(x=>x.status);
+  const checkoutDone=statuses.length>0&&statuses.every(s=>['retirado','devolvido','pendente'].includes(s));
+  const returnDone=statuses.length>0&&statuses.every(s=>['devolvido','pendente'].includes(s));
   flowState.stage='separacao';
   flowState.checks={separacao:new Set(),checkout:new Set(),retorno:new Set(),checkin:new Set()};
-  flowState.issues=new Set();
+  flowState.issues=new Set(data.filter(x=>x.status==='pendente').map((x,i)=>flowItems[i]?.id).filter(Boolean));
   flowState.busy=false;
   flowState.completedStages=new Set();
-  openFlow('separacao');
+  if(checkoutDone){
+    flowState.completedStages.add('separacao');
+    flowState.completedStages.add('checkout');
+    flowState.checks.separacao=new Set(ids);
+    flowState.checks.checkout=new Set(ids);
+  }
+  if(returnDone){
+    flowState.completedStages.add('retorno');
+    flowState.completedStages.add('checkin');
+    flowState.checks.retorno=new Set(ids);
+    flowState.checks.checkin=new Set(ids);
+  }
+  openFlow(checkoutDone?'retorno':'separacao');
   setCloudStatus(data.length+' equipamento'+(data.length!==1?'s':'')+' carregado'+(data.length!==1?'s':'')+' para a operação.','ok');
 }
 function setGateError(message){const e=document.getElementById('gateError');if(e)e.textContent=message||''}
@@ -564,7 +580,7 @@ let flowItems=[];
 const flowState={
  stage:'separacao',
  checks:{
-   separacao:new Set([1,2,3,4,5]),
+   separacao:new Set(),
    checkout:new Set(),
    retorno:new Set(),
    checkin:new Set()
@@ -729,46 +745,83 @@ function reportItemIssue(id){
   flowState.issues.add(id);
   renderFlow();
 }
-function finishFlowStage(){
+async function persistFlowStage(stage,checked){
+  if(!activeReservationId||!cloudUser)return true;
+  const now=new Date().toISOString();
+  const itemIds=flowItems.filter(i=>checked.has(i.id)).map(i=>i.dbId);
+  try{
+    if(stage==='separacao'){
+      const q=await supabaseClient.from('reservation_items').update({status:'separado'}).in('id',itemIds);
+      if(q.error)throw q.error;
+      await supabaseClient.from('reservations').update({status:'separado'}).eq('id',activeReservationId);
+    }else if(stage==='checkout'){
+      const q=await supabaseClient.from('reservation_items').update({status:'retirado',checked_out_at:now,checked_out_by:cloudUser.id}).in('id',itemIds);
+      if(q.error)throw q.error;
+      const r=await supabaseClient.from('reservations').update({status:'retirado'}).eq('id',activeReservationId);
+      if(r.error)throw r.error;
+      await supabaseClient.from('reservation_events').insert(itemIds.map(id=>({reservation_id:activeReservationId,reservation_item_id:id,event_type:'checkout',actor_id:cloudUser.id,metadata:{}})));
+    }else if(stage==='checkin'){
+      const updates=flowItems.map(async item=>{
+        const isChecked=checked.has(item.id);
+        const hasIssue=flowState.issues.has(item.id);
+        const values=isChecked
+          ? {status:hasIssue?'pendente':'devolvido',returned_at:now,returned_by:cloudUser.id,problem_reported:hasIssue,return_condition:hasIssue?'avariado':'bom'}
+          : {status:'pendente',problem_reported:true};
+        const q=await supabaseClient.from('reservation_items').update(values).eq('id',item.dbId);
+        if(q.error)throw q.error;
+        if(hasIssue){
+          const a=await supabaseClient.from('assets').update({status:'manutencao',condition:'avariado'}).eq('id',item.assetId);
+          if(a.error)throw a.error;
+          await supabaseClient.from('maintenance_cases').insert({asset_id:item.assetId,opened_by:cloudUser.id,issue:'Problema informado no check-in da reserva',status:'aguardando_levar'});
+        }
+        return hasIssue;
+      });
+      await Promise.all(updates);
+      const r=await supabaseClient.from('reservations').update({status:flowState.issues.size||checked.size<flowItems.length?'devolucao_parcial':'concluido'}).eq('id',activeReservationId);
+      if(r.error)throw r.error;
+    }
+    return true;
+  }catch(error){
+    setCloudStatus('Etapa registrada localmente, mas houve falha na sincronização: '+error.message,'error');
+    return false;
+  }
+}
+async function finishFlowStage(){
   if(flowState.busy||flowState.completedStages.has(flowState.stage))return;
   const stage=flowState.stage;
   const checked=flowState.checks[stage];
   const total=flowItems.length;
   const result=document.getElementById('flowResult');
-
   flowState.busy=true;
   renderFlow();
-
-  if((stage==='separacao'||stage==='checkout') && checked.size<total){
-    result.innerHTML=`<div class="pending-box"><h4>Faltam ${total-checked.size} itens</h4><div class="muted">Confira a carga antes de concluir esta etapa.</div></div>`;
+  if((stage==='separacao'||stage==='checkout')&&checked.size<total){
+    result.innerHTML='<div class="pending-box"><h4>Faltam '+(total-checked.size)+' itens</h4><div class="muted">Confira a carga antes de concluir esta etapa.</div></div>';
     flowState.busy=false;
     renderFlow();
     return;
   }
-
+  const synced=await persistFlowStage(stage,checked);
   flowState.completedStages.add(stage);
   saveOperationalState();
-
   if(stage==='separacao'){
-    flowState.checks.checkout=new Set(checked);
     result.innerHTML='<div class="done-box"><h4>✓ Carga separada</h4><div class="muted">Pronta para a conferência de saída.</div></div>';
+    flowState.checks.checkout=new Set();
     setTimeout(()=>{flowState.busy=false;setFlowStage('checkout')},400);
   }else if(stage==='checkout'){
-    flowState.checks.retorno=new Set(checked);
-    result.innerHTML='<div class="done-box"><h4>✓ Retirada confirmada</h4><div class="muted">A carga agora está oficialmente em uso. Próxima etapa: retorno.</div></div>';
+    result.innerHTML='<div class="done-box"><h4>✓ Check-out concluído</h4><div class="muted">Esta etapa ficará disponível somente para consulta. Próxima etapa: retorno.</div></div>';
+    flowState.checks.retorno=new Set();
     setTimeout(()=>{flowState.busy=false;setFlowStage('retorno')},400);
   }else if(stage==='retorno'){
-    flowState.checks.checkin=new Set(checked);
-    result.innerHTML=`<div class="done-box"><h4>✓ Conferência concluída</h4><div class="muted">${checked.size<total?`${total-checked.size} item(ns) seguirá(ão) como pendência. `:''}Próxima etapa: check-in na Catarse.</div></div>`;
+    result.innerHTML='<div class="done-box"><h4>✓ Conferência de retorno concluída</h4><div class="muted">Próxima etapa: check-in na Catarse.</div></div>';
+    flowState.checks.checkin=new Set();
     setTimeout(()=>{flowState.busy=false;setFlowStage('checkin')},400);
   }else if(stage==='checkin'){
     registerRecords(checked);
     const issues=flowState.issues.size;
-    result.innerHTML=`<div class="done-box"><h4>✓ Check-in concluído</h4><div class="muted">Reserva encerrada${checked.size<total?' com pendência':''}.${issues?` ${issues} item${issues>1?'s':''} registrado${issues>1?'s':''} para manutenção.`:''}</div></div>`;
+    result.innerHTML='<div class="done-box"><h4>✓ Check-in concluído</h4><div class="muted">Reserva encerrada'+(checked.size<total?' com pendência':'')+'.'+(issues?' '+issues+' item(ns) enviado(s) para manutenção.':'')+'</div></div>';
     setTimeout(()=>{flowState.busy=false;go('reservas');document.getElementById('reservationHome').classList.remove('hidden');document.getElementById('reservationWizard').classList.add('hidden')},500);
   }
 }
-
 renderPendingHome();
 
 </script>
